@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+qdrant-client==1.9.1
+openai>=1.40.0
+tiktoken
+python-dotenv
+pydantic
+python-multipart
+azure-cognitiveservices-speech>=1.38.0

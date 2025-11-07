@@ -1,0 +1,49 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()  # loads .env in this folder
+
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_biz_english")
+
+# Azure OpenAI Configuration - Chat (Sweden Central)
+AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+AZURE_OPENAI_CHAT_DEPLOYMENT = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-35-turbo")
+
+# Azure OpenAI Configuration - Embeddings (UAE North - separate region)
+AZURE_OPENAI_EMBEDDING_KEY = os.getenv("AZURE_OPENAI_EMBEDDING_KEY", AZURE_OPENAI_KEY)
+AZURE_OPENAI_EMBEDDING_ENDPOINT = os.getenv("AZURE_OPENAI_EMBEDDING_ENDPOINT", AZURE_OPENAI_ENDPOINT)
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
+
+# Azure Speech Service Configuration (for pronunciation assessment)
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "eastasia")
+
+# Fallback to OpenAI if Azure not configured
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+
+# Determine which service to use
+USE_AZURE = bool(AZURE_OPENAI_KEY and AZURE_OPENAI_ENDPOINT)
+USE_AZURE_EMBEDDINGS = bool(AZURE_OPENAI_EMBEDDING_KEY and AZURE_OPENAI_EMBEDDING_ENDPOINT)
+
+if USE_AZURE:
+    print(f"[CONFIG] Using Azure OpenAI (Endpoint: {AZURE_OPENAI_ENDPOINT})")
+    print(f"[CONFIG] Chat Deployment: {AZURE_OPENAI_CHAT_DEPLOYMENT}")
+else:
+    print(f"[CONFIG] Using OpenAI API (Fallback mode)")
+    print(f"[CONFIG] Chat Model: {CHAT_MODEL}")
+
+if USE_AZURE_EMBEDDINGS:
+    print(f"[CONFIG] Using Azure Embeddings (Endpoint: {AZURE_OPENAI_EMBEDDING_ENDPOINT})")
+    print(f"[CONFIG] Embedding Deployment: {AZURE_OPENAI_EMBEDDING_DEPLOYMENT}")
+else:
+    print(f"[CONFIG] Using OpenAI Embeddings (Fallback)")
+    print(f"[CONFIG] Embedding Model: {EMBED_MODEL}")
+
+if AZURE_SPEECH_KEY:
+    print(f"[CONFIG] Azure Speech Service: {AZURE_SPEECH_REGION}")
+else:
+    print("[CONFIG] Azure Speech Service: NOT CONFIGURED")
