@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Secrets & Environment
+.env
+.env.local
+.env.*.local
+secrets.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+bizeng.db
+
+# Logs
+*.log
+uvicorn.out
+uvicorn.pid
+
+# Sessions & temp files
+sessions/
+*.tmp
+.cache/
+temp/
+
+# OS
+Thumbs.db
+.DS_Store
+NUL
+
+# Node (if applicable)
+node_modules/
+package-lock.json
+
+# Build artifacts
+dist/
+build/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Alembic (migrations)
+versions/
+
