@@ -16,7 +16,7 @@ import json
 from typing import Any, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel, validator
 
@@ -451,8 +451,11 @@ class ChatRespDto(BaseModel):
     answer: str
     sources: list[str] = []
 
+from tracking import track
+from deps import get_optional_user
+
 @app.post("/chat", response_model=ChatRespDto)
-async def chat(req: ChatReqDto) -> ChatRespDto:
+async def chat(req: ChatReqDto, user = Depends(get_optional_user)) -> ChatRespDto:
     """
     Free chat mode - conversational AI for business English learning
     Uses OpenAI to provide natural assistance without strict RAG grounding
@@ -485,6 +488,13 @@ async def chat(req: ChatReqDto) -> ChatRespDto:
 
         print(f"[chat] Calling OpenAI with {len(messages)} messages", flush=True)
 
+        # Instrument: opened chat
+        try:
+            uid = user.id if user else None
+            track(uid, "chat_opened", feature="chat", message_count=len(messages))
+        except Exception:
+            pass
+
         # Call OpenAI API using the existing client
         chat_model = AZURE_OPENAI_CHAT_DEPLOYMENT if USE_AZURE else CHAT_MODEL
         response = oai.chat.completions.create(
@@ -503,15 +513,23 @@ async def chat(req: ChatReqDto) -> ChatRespDto:
         # SANITIZE logging
         print(f"[chat] Response generated ({len(ai_message)} chars)", flush=True)
 
+        # Instrument: chat message produced
+        try:
+            uid = user.id if user else None
+            track(uid, "chat_message", feature="chat", message_length=len(ai_message))
+        except Exception:
+            pass
+
         return ChatRespDto(answer=ai_message, sources=[])
 
     except BadRequestError as e:
         msg = ""
         try:
-            msg = e.response.json().get("error", {}).get("message", "") or e.response.json().get("message","")
+            msg = e.response.json().get("error", {}).get("message", "") or e.response.json().get("message",
+                                                                                                 "")
         except Exception:
             pass
-        msg = (msg or "").encode("ascii","ignore").decode("ascii")
+        msg = (msg or "").encode("ascii", "ignore").decode("ascii")
         raise HTTPException(status_code=500, detail=f"/chat failed: BadRequestError: {msg}")
     except (AuthenticationError, PermissionDeniedError, RateLimitError, NotFoundError) as e:
         hint = {
@@ -1137,5 +1155,3 @@ app.include_router(admin.router)
 app.include_router(tracking.router)
 
 print("[startup] ✅ Auth routers registered: /auth, /me, /admin, /tracking", flush=True)
-
-

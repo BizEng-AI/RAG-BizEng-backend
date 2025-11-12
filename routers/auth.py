@@ -8,6 +8,7 @@ from db import get_db
 from models import User, Role, UserRole, RefreshToken
 from schemas import RegisterIn, LoginIn, TokenOut, RefreshIn
 from security import hash_password, verify_password, make_access_token, make_refresh_token
+from tracking import track
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -56,6 +57,12 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
     db.add(RefreshToken(user_id=user.id, token=refresh_token))
     db.commit()
 
+    # Instrument: user registered
+    try:
+        track(user.id, "user_registered", feature="auth", email=payload.email)
+    except Exception:
+        pass
+
     return TokenOut(
         access_token=access_token,
         refresh_token=refresh_token
@@ -94,6 +101,12 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 
     db.add(RefreshToken(user_id=user.id, token=refresh_token))
     db.commit()
+
+    # Instrument: user login
+    try:
+        track(user.id, "user_login", feature="auth")
+    except Exception:
+        pass
 
     return TokenOut(
         access_token=access_token,
@@ -142,6 +155,12 @@ def refresh_token(payload: RefreshIn, db: Session = Depends(get_db)):
     db.add(RefreshToken(user_id=user.id, token=new_refresh_token))
     db.commit()
 
+    # Instrument: token rotated
+    try:
+        track(user.id, "refresh_rotated", feature="auth")
+    except Exception:
+        pass
+
     return TokenOut(
         access_token=access_token,
         refresh_token=new_refresh_token
@@ -164,5 +183,10 @@ def logout(payload: RefreshIn, db: Session = Depends(get_db)):
         token_row.revoked = True
         db.commit()
 
-    return {"message": "Logged out successfully"}
+        # Instrument: logout
+        try:
+            track(token_row.user_id, "user_logout", feature="auth")
+        except Exception:
+            pass
 
+    return {"message": "Logged out successfully"}

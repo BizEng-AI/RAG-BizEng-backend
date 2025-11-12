@@ -2,7 +2,7 @@
 """
 FastAPI endpoints for the roleplay feature.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -11,6 +11,8 @@ from roleplay_session import (
 )
 from roleplay_scenarios import list_scenarios, get_scenario
 from roleplay_engine import engine
+from tracking import track
+from deps import get_optional_user
 
 
 router = APIRouter(prefix="/roleplay", tags=["roleplay"])
@@ -117,7 +119,7 @@ def get_scenario_details(scenario_id: str):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-def start_roleplay(req: StartSessionRequest):
+def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user)):
     """
     Start a new roleplay session.
     Returns session info and AI's opening message.
@@ -138,6 +140,13 @@ def start_roleplay(req: StartSessionRequest):
         session.add_turn("ai", initial_message)
         save_session(session)
 
+        # Instrument: roleplay started
+        try:
+            uid = user.id if user else None
+            track(uid, "started_roleplay", feature="roleplay", scenario_id=req.scenario_id)
+        except Exception:
+            pass
+
         return StartSessionResponse(
             session_id=session.session_id,
             scenario_title=scenario.title,
@@ -156,7 +165,7 @@ def start_roleplay(req: StartSessionRequest):
 
 
 @router.post("/turn", response_model=TurnResponse)
-def submit_turn(req: TurnRequest):
+def submit_turn(req: TurnRequest, user = Depends(get_optional_user)):
     """
     Submit student's message and get AI's response with feedback.
     """
@@ -177,6 +186,13 @@ def submit_turn(req: TurnRequest):
         # Validate message
         if not req.message or len(req.message.strip()) < 2:
             raise HTTPException(status_code=400, detail="Message is too short")
+
+        # Instrument: student sent a message
+        try:
+            uid = user.id if user else None
+            track(uid, "roleplay_turn_submitted", feature="roleplay", session_id=req.session_id, message_length=len(req.message))
+        except Exception:
+            pass
 
         # Process turn through engine
         result = engine.process_turn(session, req.message)
@@ -202,6 +218,13 @@ def submit_turn(req: TurnRequest):
                 "errors": [],
                 "feedback": "Great job! Your response was appropriate."
             }
+
+        # Instrument: AI replied
+        try:
+            uid = user.id if user else None
+            track(uid, "roleplay_ai_response", feature="roleplay", session_id=req.session_id, ai_message_length=len(result.get('ai_message','')))
+        except Exception:
+            pass
 
         return TurnResponse(
             ai_message=result["ai_message"],

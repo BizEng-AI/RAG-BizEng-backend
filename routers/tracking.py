@@ -12,6 +12,7 @@ from schemas import (
     ExerciseAttemptIn, ExerciseAttemptUpdate, ExerciseAttemptOut,
     ActivityEventIn, ActivityEventOut
 )
+from tracking import track
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
@@ -40,6 +41,12 @@ def start_attempt(
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
+
+    # instrument
+    try:
+        track(user.id, "exercise_started", feature=attempt.exercise_type, exercise_id=attempt.exercise_id)
+    except Exception:
+        pass
 
     return ExerciseAttemptOut(
         id=attempt.id,
@@ -96,6 +103,13 @@ def finish_attempt(
     db.commit()
     db.refresh(attempt)
 
+    # instrument completion
+    try:
+        track(user.id, "exercise_submitted", feature=attempt.exercise_type,
+              exercise_id=attempt.exercise_id, score=attempt.score, duration_seconds=attempt.duration_seconds)
+    except Exception:
+        pass
+
     return ExerciseAttemptOut(
         id=attempt.id,
         user_id=attempt.user_id,
@@ -134,6 +148,12 @@ def log_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+
+    # instrument (also track) - duplicate to tracking table for consistency
+    try:
+        track(user.id, payload.event_type, feature=payload.feature, **(payload.extra_metadata or {}))
+    except Exception:
+        pass
 
     return ActivityEventOut(
         id=event.id,
@@ -175,4 +195,3 @@ def get_my_attempts(
         )
         for a in attempts
     ]
-

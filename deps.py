@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 from jose import JWTError
+from typing import Optional
 
 from db import get_db
 from models import User, UserRole
@@ -68,6 +69,36 @@ def get_current_user(
     return user
 
 
+def get_optional_user(
+    creds: HTTPAuthorizationCredentials = Depends(bearer),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """
+    Try to resolve an authenticated user from the Authorization header.
+    Returns `None` when no valid access token is present.
+    This is safe to use on public endpoints where auth is optional.
+    """
+    if not creds:
+        return None
+
+    token = creds.credentials
+
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        return None
+
+    if payload.get("type") != "access":
+        return None
+
+    email = payload.get("sub")
+    if not email:
+        return None
+
+    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    return user
+
+
 def require_roles(*required: str):
     """
     Dependency factory for RBAC
@@ -109,4 +140,3 @@ def require_roles(*required: str):
 # Common dependencies
 require_admin = require_roles("admin")
 require_student = require_roles("student", "admin")  # Admins can act as students
-
