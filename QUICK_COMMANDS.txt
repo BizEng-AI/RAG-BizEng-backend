@@ -1,0 +1,69 @@
+# 🎯 QUICK FIX COMMANDS - COPY & PASTE
+
+```powershell
+# ============================================
+# STEP 1: Install Dependencies (30 seconds)
+# ============================================
+cd C:\Users\sanja\rag-biz-english\server
+pip install -r requirements.txt --upgrade
+
+
+# ============================================
+# STEP 2: Test System (30 seconds)
+# ============================================
+python test_system_verification.py
+# Expected: 7/7 tests passed ✅
+
+
+# ============================================
+# STEP 3: Start Server (Terminal 1)
+# ============================================
+uvicorn app:app --reload --port 8020
+# Keep this running!
+
+
+# ============================================
+# STEP 4: Test APIs (Terminal 2)
+# ============================================
+cd C:\Users\sanja\rag-biz-english\server
+python test_auth_system.py
+# Expected: All 9 tests pass ✅
+
+
+# ============================================
+# STEP 5: Create Admin (Terminal 2)
+# ============================================
+python grant_admin.py student1@test.com
+# Expected: "Granted admin role" ✅
+
+
+# ============================================
+# STEP 6: Deploy (Terminal 2)
+# ============================================
+fly secrets set JWT_SECRET="your-very-long-random-string-32-chars-min" --app bizeng-server
+fly deploy --app bizeng-server
+curl https://bizeng-server.fly.dev/health
+# Expected: {"status":"ok"} ✅
+```
+
+---
+
+## ⚡ ONE-LINER (If in a hurry)
+
+```powershell
+cd C:\Users\sanja\rag-biz-english\server ; pip install -r requirements.txt --upgrade ; python test_system_verification.py
+```
+
+---
+
+## ✅ Success Indicators
+
+- 7/7 system tests pass
+- 9/9 API tests pass
+- Server starts without errors
+- Production health check returns OK
+
+---
+
+**Status:** Ready to execute! 🚀
+

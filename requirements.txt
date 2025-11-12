@@ -1,9 +1,20 @@
-fastapi
-uvicorn[standard]
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
 qdrant-client==1.9.1
 openai>=1.40.0
 tiktoken
 python-dotenv
 pydantic
+pydantic[email]
 python-multipart
 azure-cognitiveservices-speech>=1.38.0
+
+# Database (PostgreSQL with Neon using psycopg)
+sqlalchemy>=2.0
+psycopg[binary]>=3.1.0
+alembic>=1.13.0
+
+# Authentication & Security
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+

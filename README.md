@@ -50,6 +50,28 @@ For issues and questions:
 **Next Phase:** Authentication & Admin Dashboard
 # BizEng Backend Server
 
+## ⚠️ SECURITY REMINDER
+
+**🔐 Before Publishing / Sharing Repository:**
+- [ ] **Rotate Qdrant API key** (takes 60 seconds in Qdrant Cloud dashboard)
+- [ ] **Rotate all Azure OpenAI keys** (Azure Portal → Regenerate keys)
+- [ ] **Rotate Azure Speech key**
+- [ ] Verify `.gitignore` is protecting sensitive files
+- [ ] Search codebase for any hardcoded credentials: `git grep -i "key\|secret\|password"`
+- [ ] Review all markdown documentation for embedded credentials
+
+**📍 Current Status:** 
+- Development keys are in use (configured Nov 10, 2025)
+- All credentials are in `.env` (gitignored)
+- Setup documentation contains example credentials (gitignored)
+
+**🔄 Key Rotation Guide:**
+1. Qdrant Cloud: Dashboard → API Keys → Create new → Copy → Update `.env` and Fly.io secrets
+2. Azure OpenAI: Azure Portal → Your resource → Keys → Regenerate Key 1 → Update `.env`
+3. Fly.io: `fly secrets set QDRANT_API_KEY="new_key" AZURE_OPENAI_KEY="new_key" --app bizeng-server`
+
+---
+
 Production-ready FastAPI server for the Business English learning platform. Provides RAG-backed Q&A, roleplay scenarios, pronunciation assessment, and student progress tracking.
 
 ## Quick Start

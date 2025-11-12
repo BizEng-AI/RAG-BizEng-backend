@@ -24,7 +24,11 @@ print(f"[ingest] QDRANT_URL={QDRANT_URL}  COLLECTION={QDRANT_COLLECTION}", flush
 print(f"[ingest] EMBED_MODEL={EMBED_MODEL}", flush=True)
 
 enc = get_encoding("cl100k_base")
-qdr = QdrantClient(url=QDRANT_URL)
+qdr = QdrantClient(
+    url=QDRANT_URL,
+    api_key=QDRANT_API_KEY,
+    timeout=30,
+)
 
 # Initialize OpenAI client for embeddings (Azure UAE North or regular OpenAI)
 if USE_AZURE_EMBEDDINGS:

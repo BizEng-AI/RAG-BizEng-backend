@@ -12,6 +12,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 from settings import (
     OPENAI_API_KEY,
     QDRANT_URL,
+    QDRANT_API_KEY,
     QDRANT_COLLECTION,
     EMBED_MODEL,
     CHAT_MODEL,
@@ -54,7 +55,11 @@ else:
     oai_embed = OpenAI(api_key=OPENAI_API_KEY)
     print(f"[roleplay_engine] ✅ Using OpenAI Embeddings (fallback)", flush=True)
 
-qdr = QdrantClient(url=QDRANT_URL)
+qdr = QdrantClient(
+    url=QDRANT_URL,
+    api_key=QDRANT_API_KEY,
+    timeout=30,
+)
 
 
 class RoleplayEngine:

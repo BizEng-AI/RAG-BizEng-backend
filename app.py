@@ -29,6 +29,7 @@ import azure.cognitiveservices.speech as speechsdk
 
 from settings import (
     QDRANT_URL,
+    QDRANT_API_KEY,
     QDRANT_COLLECTION,
     OPENAI_API_KEY,
     EMBED_MODEL,
@@ -88,11 +89,51 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 app = FastAPI(title="Biz-English RAG API")
 print("[startup] app.py reloaded OK", flush=True)
 
+# Initialize database on startup
+from db_init import init_db
+
+@app.on_event("startup")
+def startup_event():
+    """Initialize database and seed roles"""
+    try:
+        init_db()
+    except Exception as e:
+        print(f"[startup] ⚠️  Database initialization warning: {e}", flush=True)
+
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "service": "bizeng-server"}
+
+# Version endpoint
+@app.get("/version")
+def version():
+    """API version information"""
+    return {
+        "version": "1.0.0",
+        "features": ["auth", "roleplay", "chat", "pronunciation", "admin_analytics"]
+    }
+
+# Import auth routers
+from routers import auth, me, admin, tracking
+app.include_router(auth.router)
+app.include_router(me.router)
+app.include_router(admin.router)
+app.include_router(tracking.router)
+
 # Import and include roleplay router
 from roleplay_api import router as roleplay_router
 app.include_router(roleplay_router)
 
-qdr = QdrantClient(url=QDRANT_URL)
+# Initialize Qdrant client with Cloud credentials
+qdr = QdrantClient(
+    url=QDRANT_URL,
+    api_key=QDRANT_API_KEY,
+    timeout=30,
+)
+print(f"[startup] ✅ Qdrant client initialized: {QDRANT_URL}", flush=True)
+print(f"[startup] ✅ Using collection: {QDRANT_COLLECTION}", flush=True)
 
 # Initialize OpenAI client for Chat (Azure Sweden Central or regular OpenAI)
 if USE_AZURE:
@@ -1081,4 +1122,20 @@ async def test_pronunciation_service():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# AUTH & ADMIN ROUTERS
+# ============================================================================
+
+from routers import auth, me, admin, tracking
+
+# Register all auth-related routers
+app.include_router(auth.router)
+app.include_router(me.router)
+app.include_router(admin.router)
+app.include_router(tracking.router)
+
+print("[startup] ✅ Auth routers registered: /auth, /me, /admin, /tracking", flush=True)
+
 

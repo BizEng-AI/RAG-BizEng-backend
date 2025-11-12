@@ -1,9 +1,23 @@
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 load_dotenv()  # loads .env in this folder
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_biz_english")
+# Database Configuration
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# JWT Authentication
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
+JWT_ALG = os.getenv("JWT_ALG", "HS256")
+ACCESS_EXPIRES_MIN = int(os.getenv("ACCESS_EXPIRES_MIN", "15"))
+REFRESH_EXPIRES_DAYS = int(os.getenv("REFRESH_EXPIRES_DAYS", "30"))
+ACCESS_EXPIRES = timedelta(minutes=ACCESS_EXPIRES_MIN)
+REFRESH_EXPIRES = timedelta(days=REFRESH_EXPIRES_DAYS)
+
+# Qdrant Configuration (Cloud)
+QDRANT_URL = os.getenv("QDRANT_URL", "https://9963ec6f-613b-4fc2-84a7-cdcd7712fed8.eu-central-1-0.aws.cloud.qdrant.io")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "bizeng")
 
 # Azure OpenAI Configuration - Chat (Sweden Central)
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")

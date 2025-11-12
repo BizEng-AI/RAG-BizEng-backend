@@ -41,7 +41,18 @@ env/
 .env
 .env.local
 .env.*.local
+*.env
 secrets.json
+
+# Sensitive setup files (contain credentials in docs)
+QDRANT_SETUP_SUMMARY.md
+QDRANT_CLOUD_SETUP_COMPLETE.md
+MIGRATION_COMPLETE.md
+SECURITY_CHECKLIST.md
+start_server.bat
+test_quick.py
+test_qdrant_client.py
+test_qdrant_cloud.py
 
 # Database
 *.db
