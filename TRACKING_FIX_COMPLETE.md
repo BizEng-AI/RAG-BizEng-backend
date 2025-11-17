@@ -21,8 +21,8 @@ def finish_attempt_internal(db, attempt_id, duration_seconds, score, passed, ext
 **Before:** Only logged to activity_events  
 **After:** Creates ExerciseAttempt record with:
 - ✅ Start time tracked
-- ✅ Duration calculated
-- ✅ Completion recorded
+  - ✅ Duration calculated
+  - ✅ Completion recorded
 
 ```python
 # Start
@@ -39,9 +39,9 @@ finish_attempt_internal(db, attempt.id, duration_seconds=duration)
 **Before:** No tracking at all  
 **After:** Creates ExerciseAttempt with score!
 - ✅ Start time tracked
-- ✅ Duration calculated
-- ✅ **Score recorded** (pronunciation_score)
-- ✅ Pass/fail status
+  - ✅ Duration calculated
+  - ✅ **Score recorded** (pronunciation_score)
+  - ✅ Pass/fail status
 
 ```python
 # Start
@@ -88,8 +88,8 @@ if is_completed:
 
 For a user who does:
 - 1 chat session (5 messages)
-- 1 pronunciation exercise
-- 1 roleplay (completes it)
+  - 1 pronunciation exercise
+  - 1 roleplay (completes it)
 
 **Before fix:**
 ```sql
@@ -130,15 +130,15 @@ Group 1:
 
 Before deploying:
 - [x] Added helper functions to tracking.py
-- [x] Modified chat endpoint with tracking
-- [x] Modified pronunciation endpoint with tracking
-- [x] Modified roleplay endpoints with tracking
-- [x] Added necessary imports (Session, get_db)
-- [x] Handled edge cases (no user, parsing errors)
-- [ ] Test locally with authenticated user
-- [ ] Deploy to Fly
-- [ ] Test from Android app
-- [ ] Verify data in admin dashboard
+  - [x] Modified chat endpoint with tracking
+  - [x] Modified pronunciation endpoint with tracking
+  - [x] Modified roleplay endpoints with tracking
+  - [x] Added necessary imports (Session, get_db)
+  - [x] Handled edge cases (no user, parsing errors)
+  - [ ] Test locally with authenticated user
+  - [ ] Deploy to Fly
+  - [ ] Test from Android app
+  - [ ] Verify data in admin dashboard
 
 ## 🚀 DEPLOYMENT STEPS
 
@@ -216,13 +216,13 @@ curl https://bizeng-server.fly.dev/admin/monitor/users_activity \
 ### 5. Test from Android App
 
 1. Open Android app
-2. Login as yoo@gmail.com
-3. Do one of each exercise:
-   - Chat: Ask a question
-   - Pronunciation: Record audio
-   - Roleplay: Complete a scenario
-4. Admin login and check dashboard
-5. Should see all 3 exercises!
+   2. Login as yoo@gmail.com
+   3. Do one of each exercise:
+      - Chat: Ask a question
+      - Pronunciation: Record audio
+      - Roleplay: Complete a scenario
+   4. Admin login and check dashboard
+   5. Should see all 3 exercises!
 
 ## 🔍 VERIFICATION
 
@@ -255,30 +255,30 @@ Should return non-empty array with real users!
 
 ### Privacy Maintained ✅
 - **NO message content stored** - only metadata
-- Chat: stores message count, not content
-- Roleplay: stores turn count, not dialogue
-- Pronunciation: stores reference text (first 100 chars), not audio
+  - Chat: stores message count, not content
+  - Roleplay: stores turn count, not dialogue
+  - Pronunciation: stores reference text (first 100 chars), not audio
 
 ### Performance Impact ✅
 - **Minimal overhead** - just 2 DB queries per exercise
-- Start: INSERT (< 10ms)
-- Finish: UPDATE (< 10ms)
-- Total: ~20ms per exercise
+  - Start: INSERT (< 10ms)
+  - Finish: UPDATE (< 10ms)
+  - Total: ~20ms per exercise
 
 ### Error Handling ✅
 - Tracking failures don't break exercises
-- Try/catch blocks around all tracking code
-- Warnings logged but exercise continues
-- Works for both authenticated and anonymous users
+  - Try/catch blocks around all tracking code
+  - Warnings logged but exercise continues
+  - Works for both authenticated and anonymous users
 
 ## 🎉 SUCCESS CRITERIA
 
 Fix is successful when:
 1. ✅ Real user does an exercise on Android
-2. ✅ Record appears in `exercise_attempts` table
-3. ✅ Admin dashboard shows the activity
-4. ✅ All 3 exercise types tracked (chat, pronunciation, roleplay)
-5. ✅ Duration and scores recorded correctly
+   2. ✅ Record appears in `exercise_attempts` table
+   3. ✅ Admin dashboard shows the activity
+   4. ✅ All 3 exercise types tracked (chat, pronunciation, roleplay)
+   5. ✅ Duration and scores recorded correctly
 
 ## 🐛 TROUBLESHOOTING
 
@@ -290,37 +290,37 @@ Fix is successful when:
    [chat] Created attempt ID: 42
    ```
 
-2. Check database directly:
-   ```sql
-   SELECT * FROM exercise_attempts 
-   WHERE user_id = 12 
-   ORDER BY started_at DESC LIMIT 5;
-   ```
+   2. Check database directly:
+      ```sql
+      SELECT * FROM exercise_attempts 
+      WHERE user_id = 12 
+      ORDER BY started_at DESC LIMIT 5;
+      ```
 
-3. Check Fly logs:
-   ```bash
-   fly logs -a bizeng-server | findstr "attempt"
-   ```
+   3. Check Fly logs:
+      ```bash
+      fly logs -a bizeng-server | findstr "attempt"
+      ```
 
 ### "Attempt created but not finished"
 
 - Check for errors in finish_attempt_internal
-- Look for "Warning: Failed to finish attempt" in logs
-- Verify session.attempt_id exists for roleplay
+  - Look for "Warning: Failed to finish attempt" in logs
+  - Verify session.attempt_id exists for roleplay
 
 ### "Duration is wrong"
 
 - Check timezone issues (started_at parsing)
-- Verify datetime calculations
-- Look for negative durations (bug)
+  - Verify datetime calculations
+  - Look for negative durations (bug)
 
 ## 📞 NEXT STEPS
 
 1. **Deploy these changes** (follow steps above)
-2. **Test thoroughly** with real users
-3. **Monitor for a day** to ensure stability
-4. **Update Android docs** if API behavior changed
-5. **Inform mom** that admin dashboard now works!
+   2. **Test thoroughly** with real users
+   3. **Monitor for a day** to ensure stability
+   4. **Update Android docs** if API behavior changed
+   5. **Inform mom** that admin dashboard now works!
 
 ---
 

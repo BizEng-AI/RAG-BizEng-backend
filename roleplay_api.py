@@ -194,17 +194,27 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
     from routers.tracking import finish_attempt_internal
     from datetime import datetime
 
+    # Log request details for debugging
+    user_info = f"user_id={user.id}" if user else "anonymous"
+    print(f"[roleplay/turn] Request from {user_info}, session={req.session_id}", flush=True)
+
     try:
-        # Load session
+        # Load session with detailed logging
+        print(f"[roleplay/turn] Loading session {req.session_id}...", flush=True)
         session = load_session(req.session_id)
+
         if not session:
+            print(f"[roleplay/turn] ❌ Session not found: {req.session_id}", flush=True)
             raise HTTPException(status_code=404, detail=f"Session not found: {req.session_id}")
 
+        print(f"[roleplay/turn] ✓ Session loaded (scenario: {session.scenario_id})", flush=True)
+
         if session.is_completed:
+            print(f"[roleplay/turn] Session already completed", flush=True)
             return TurnResponse(
                 ai_message="This roleplay session has been completed. Great job!",
                 correction=None,
-                current_stage=session.current_stage,  # Changed from stage_info to current_stage
+                current_stage=session.current_stage,
                 is_completed=True
             )
 
@@ -212,15 +222,23 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         if not req.message or len(req.message.strip()) < 2:
             raise HTTPException(status_code=400, detail="Message is too short")
 
+        print(f"[roleplay/turn] Processing message: '{req.message[:50]}...'", flush=True)
+
         # Instrument: student sent a message
         try:
             uid = user.id if user else None
             track(uid, "roleplay_turn_submitted", feature="roleplay", session_id=req.session_id, message_length=len(req.message))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[roleplay/turn] Warning: track() failed: {e}", flush=True)
 
-        # Process turn through engine
-        result = engine.process_turn(session, req.message)
+        # Process turn through engine (this calls Azure - may timeout)
+        try:
+            print(f"[roleplay/turn] Calling roleplay engine...", flush=True)
+            result = engine.process_turn(session, req.message)
+            print(f"[roleplay/turn] ✓ Engine returned response", flush=True)
+        except Exception as e:
+            print(f"[roleplay/turn] ❌ Engine error: {type(e).__name__}: {e}", flush=True)
+            raise HTTPException(status_code=500, detail=f"Roleplay engine error: {str(e)}")
 
         # If session just completed, finish the attempt
         if result["is_completed"] and user and hasattr(session, 'attempt_id'):

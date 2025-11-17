@@ -2,12 +2,17 @@
 Test that users_activity endpoint now returns ALL users
 """
 import requests
+import time
 
-BASE_URL = "http://localhost:8020"  # Test locally first
+BASE_URL = "https://bizeng-server.fly.dev"  # Use production directly
 
 print("="*70)
 print("TESTING users_activity ENDPOINT - Should Return ALL Users")
 print("="*70)
+
+# Wait a moment for deployment to complete
+print("\n⏳ Waiting 10 seconds for deployment to complete...")
+time.sleep(10)
 
 # Login as admin
 print("\n1. Logging in as admin...")
@@ -18,17 +23,8 @@ resp = requests.post(f"{BASE_URL}/auth/login", json={
 
 if resp.status_code != 200:
     print(f"✗ Login failed: {resp.status_code}")
-    print("Switch to production URL...")
-    BASE_URL = "https://bizeng-server.fly.dev"
-
-    resp = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": "yoo@gmail.com",
-        "password": "qwerty"
-    })
-
-    if resp.status_code != 200:
-        print(f"✗ Login failed on production too: {resp.status_code}")
-        exit(1)
+    print(resp.text)
+    exit(1)
 
 token = resp.json().get("access_token")
 print(f"✓ Login successful")
@@ -40,7 +36,7 @@ print("\n2. Fetching all users from /admin/students...")
 resp = requests.get(f"{BASE_URL}/admin/students", headers=headers, timeout=30)
 
 if resp.status_code == 200:
-    all_users = resp.json().get('students', [])
+    all_users = resp.json()  # Returns array directly
     print(f"✓ Total registered users: {len(all_users)}")
 
     # Show sample

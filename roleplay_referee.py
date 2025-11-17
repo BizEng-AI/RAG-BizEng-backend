@@ -106,6 +106,7 @@ Analyze this message and provide feedback. Remember: flag ANY unprofessional lan
         try:
             # Use Azure deployment name if using Azure, otherwise use CHAT_MODEL
             chat_model = AZURE_OPENAI_CHAT_DEPLOYMENT if USE_AZURE else CHAT_MODEL
+            print(f"[referee] Analyzing student message (model: {chat_model})...", flush=True)
 
             response = oai.chat.completions.create(
                 model=chat_model,
@@ -114,10 +115,12 @@ Analyze this message and provide feedback. Remember: flag ANY unprofessional lan
                     {"role": "user", "content": user_prompt}
                 ],
                 max_tokens=200,
-                temperature=0.3
+                temperature=0.3,
+                timeout=30  # 30 second timeout for error analysis
             )
 
             analysis_text = response.choices[0].message.content.strip()
+            print(f"[referee] ✓ Analysis complete", flush=True)
 
             # Parse the response
             if "NO_ERROR" in analysis_text:

@@ -238,14 +238,18 @@ class RoleplayEngine:
         # Generate response
         try:
             chat_model = AZURE_OPENAI_CHAT_DEPLOYMENT if USE_AZURE else CHAT_MODEL
+            print(f"[roleplay_engine] Calling Azure OpenAI (model: {chat_model})...", flush=True)
+
             response = oai.chat.completions.create(
                 model=chat_model,
                 messages=messages,
                 max_tokens=250,
-                temperature=0.7  # Slightly higher for natural conversation
+                temperature=0.7,  # Slightly higher for natural conversation
+                timeout=45  # 45 second timeout to prevent hanging
             )
 
             ai_message = response.choices[0].message.content.strip()
+            print(f"[roleplay_engine] ✓ Got response ({len(ai_message)} chars)", flush=True)
 
             # DO NOT append correction to ai_message - it's sent separately
             # The Android app displays correction in its own UI element

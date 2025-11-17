@@ -354,6 +354,7 @@ def ask(req: AskReq) -> AskResp:
                           {"role":"user","content":user_prompt}],
                 max_tokens=300,
                 temperature=0.2,
+                timeout=45  # 45 second timeout
             )
             answer = chat.choices[0].message.content
             return AskResp(answer=answer, sources=sources)
@@ -386,7 +387,8 @@ def ask(req: AskReq) -> AskResp:
                         model=chat_model,
                         messages=fallback_messages,
                         max_tokens=300,
-                        temperature=0.7
+                        temperature=0.7,
+                        timeout=45  # 45 second timeout
                     )
 
                     answer = chat.choices[0].message.content
@@ -527,7 +529,8 @@ async def chat(req: ChatReqDto, user = Depends(get_optional_user), db: Session =
             model=chat_model,
             messages=messages,
             temperature=0.7,
-            max_tokens=500  # Azure-compatible
+            max_tokens=500,  # Azure-compatible
+            timeout=45  # 45 second timeout to prevent hanging
         )
 
         ai_message = response.choices[0].message.content
