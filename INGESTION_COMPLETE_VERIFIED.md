@@ -223,25 +223,33 @@ Business English Book 3: 309/309 (100%)
 
 ## 🎓 BOOK COVERAGE
 
-### Estimated Content
-Based on vector counts and average chunk sizes:
+### Verified Content (Measured from actual files)
 
 **Book 1 (178 vectors):**
-- ~160,000 words
-- ~320 pages equivalent
-- Covers: Fundamentals, basic business communication
+- File: book_1_ocr.txt
+- Size: 538,065 bytes (529,307 characters)
+- Content: "Student's Book" by John Allison with Paul Emmerson
+- Covers: Business English fundamentals and communication
 
 **Book 2 (63 vectors):**
-- ~57,000 words
-- ~115 pages equivalent
-- Covers: Intermediate topics, professional writing
+- File: book_2_ocr.txt
+- Size: 207,249 bytes (203,513 characters)
+- Content: "The Handbook of Business English Dialogue in Authentic Contexts" by Eva Minasyan, Lilit Saakian
+- Covers: Practical dialogues and authentic business scenarios
+- Note: Smaller size is intentional—focused handbook format
 
 **Book 3 (309 vectors):**
-- ~278,000 words
-- ~555 pages equivalent
-- Covers: Advanced topics, complex scenarios
+- File: book_3_ocr.txt
+- Size: 1,059,166 bytes (1,041,932 characters)
+- Content: Adapted by The Saylor Foundation (Creative Commons)
+- Covers: Comprehensive business English topics
 
-**Total:** ~495,000 words, ~990 pages equivalent of content
+**Total:** 1,804,480 bytes (1,774,752 characters) of business English content
+
+### Verification
+- ✅ Expected chunks from files: 550
+- ✅ Actual vectors in Qdrant: 550
+- ✅ **PERFECT 1:1 MATCH**
 
 ---
 
