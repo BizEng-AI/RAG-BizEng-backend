@@ -1,0 +1,77 @@
+{
+  "overview": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\overview.json",
+    "headers_file": "admin_test_results_local\\overview_headers.txt"
+  },
+  "activity_events": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\activity_events.json",
+    "headers_file": "admin_test_results_local\\activity_events_headers.txt"
+  },
+  "exercise_attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\exercise_attempts.json",
+    "headers_file": "admin_test_results_local\\exercise_attempts_headers.txt"
+  },
+  "attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\attempts.json",
+    "headers_file": "admin_test_results_local\\attempts_headers.txt"
+  },
+  "events": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\events.json",
+    "headers_file": "admin_test_results_local\\events_headers.txt"
+  },
+  "sessions": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\sessions.json",
+    "headers_file": "admin_test_results_local\\sessions_headers.txt"
+  },
+  "users": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\users.json",
+    "headers_file": "admin_test_results_local\\users_headers.txt"
+  },
+  "users_signups": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\users_signups.json",
+    "headers_file": "admin_test_results_local\\users_signups_headers.txt"
+  },
+  "user_roles": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\user_roles.json",
+    "headers_file": "admin_test_results_local\\user_roles_headers.txt"
+  },
+  "roles": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\roles.json",
+    "headers_file": "admin_test_results_local\\roles_headers.txt"
+  },
+  "skill_map_id": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\skill_map_id.json",
+    "headers_file": "admin_test_results_local\\skill_map_id_headers.txt"
+  },
+  "skill_map_type": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\skill_map_type.json",
+    "headers_file": "admin_test_results_local\\skill_map_type_headers.txt"
+  },
+  "vw_attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\vw_attempts.json",
+    "headers_file": "admin_test_results_local\\vw_attempts_headers.txt"
+  },
+  "playing_with_neon": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\playing_with_neon.json",
+    "headers_file": "admin_test_results_local\\playing_with_neon_headers.txt"
+  },
+  "refresh_tokens": {
+    "status": 401,
+    "body_file": "admin_test_results_local\\refresh_tokens.json",
+    "headers_file": "admin_test_results_local\\refresh_tokens_headers.txt"
+  }
+}

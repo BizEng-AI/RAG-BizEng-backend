@@ -13,6 +13,7 @@ from roleplay_scenarios import list_scenarios, get_scenario
 from roleplay_engine import engine
 from tracking import track
 from deps import get_optional_user
+from db import get_db
 
 
 router = APIRouter(prefix="/roleplay", tags=["roleplay"])
@@ -119,11 +120,14 @@ def get_scenario_details(scenario_id: str):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user)):
+def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), db = Depends(get_db)):
     """
     Start a new roleplay session.
     Returns session info and AI's opening message.
     """
+    from routers.tracking import create_attempt_internal
+    from datetime import datetime
+
     try:
         scenario = get_scenario(req.scenario_id)
         if not scenario:
@@ -131,6 +135,24 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user)):
 
         # Create session
         session = create_session(req.scenario_id, req.student_name)
+
+        # Create attempt record
+        if user:
+            try:
+                attempt = create_attempt_internal(
+                    db=db,
+                    user_id=user.id,
+                    exercise_type="roleplay",
+                    exercise_id=session.session_id,
+                    extra_metadata={
+                        "scenario_id": req.scenario_id,
+                        "scenario_title": scenario.title
+                    }
+                )
+                session.attempt_id = attempt.id  # Store for later
+                print(f"[roleplay] Created attempt ID: {attempt.id} for session {session.session_id}", flush=True)
+            except Exception as e:
+                print(f"[roleplay] Warning: Failed to create attempt: {e}", flush=True)
 
         # Generate opening message from AI
         first_stage = scenario.stages[0]
@@ -165,10 +187,13 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user)):
 
 
 @router.post("/turn", response_model=TurnResponse)
-def submit_turn(req: TurnRequest, user = Depends(get_optional_user)):
+def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depends(get_db)):
     """
     Submit student's message and get AI's response with feedback.
     """
+    from routers.tracking import finish_attempt_internal
+    from datetime import datetime
+
     try:
         # Load session
         session = load_session(req.session_id)
@@ -196,6 +221,32 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user)):
 
         # Process turn through engine
         result = engine.process_turn(session, req.message)
+
+        # If session just completed, finish the attempt
+        if result["is_completed"] and user and hasattr(session, 'attempt_id'):
+            try:
+                # Parse started_at from ISO string to datetime
+                from datetime import datetime
+                if isinstance(session.started_at, str):
+                    started = datetime.fromisoformat(session.started_at.replace('Z', '+00:00'))
+                else:
+                    started = session.started_at
+                duration = int((datetime.utcnow() - started).total_seconds())
+
+                finish_attempt_internal(
+                    db=db,
+                    attempt_id=session.attempt_id,
+                    duration_seconds=duration,
+                    score=None,  # Could calculate based on corrections in future
+                    passed=True,  # Completed the roleplay
+                    extra_metadata={
+                        "total_turns": len(session.dialogue_history),
+                        "corrections_count": len(session.corrections_log) if hasattr(session, 'corrections_log') else 0
+                    }
+                )
+                print(f"[roleplay] ✅ Attempt {session.attempt_id} finished - Duration: {duration}s, Turns: {len(session.dialogue_history)}", flush=True)
+            except Exception as e:
+                print(f"[roleplay] Warning: Failed to finish attempt: {e}", flush=True)
 
         # Convert correction format from OLD to NEW format for Android
         correction = result["correction"]

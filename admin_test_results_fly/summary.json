@@ -1,0 +1,77 @@
+{
+  "overview": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\overview.json",
+    "headers_file": "admin_test_results_fly\\overview_headers.txt"
+  },
+  "activity_events": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\activity_events.json",
+    "headers_file": "admin_test_results_fly\\activity_events_headers.txt"
+  },
+  "exercise_attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\exercise_attempts.json",
+    "headers_file": "admin_test_results_fly\\exercise_attempts_headers.txt"
+  },
+  "attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\attempts.json",
+    "headers_file": "admin_test_results_fly\\attempts_headers.txt"
+  },
+  "events": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\events.json",
+    "headers_file": "admin_test_results_fly\\events_headers.txt"
+  },
+  "sessions": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\sessions.json",
+    "headers_file": "admin_test_results_fly\\sessions_headers.txt"
+  },
+  "users": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\users.json",
+    "headers_file": "admin_test_results_fly\\users_headers.txt"
+  },
+  "users_signups": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\users_signups.json",
+    "headers_file": "admin_test_results_fly\\users_signups_headers.txt"
+  },
+  "user_roles": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\user_roles.json",
+    "headers_file": "admin_test_results_fly\\user_roles_headers.txt"
+  },
+  "roles": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\roles.json",
+    "headers_file": "admin_test_results_fly\\roles_headers.txt"
+  },
+  "skill_map_id": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\skill_map_id.json",
+    "headers_file": "admin_test_results_fly\\skill_map_id_headers.txt"
+  },
+  "skill_map_type": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\skill_map_type.json",
+    "headers_file": "admin_test_results_fly\\skill_map_type_headers.txt"
+  },
+  "vw_attempts": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\vw_attempts.json",
+    "headers_file": "admin_test_results_fly\\vw_attempts_headers.txt"
+  },
+  "playing_with_neon": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\playing_with_neon.json",
+    "headers_file": "admin_test_results_fly\\playing_with_neon_headers.txt"
+  },
+  "refresh_tokens": {
+    "status": 401,
+    "body_file": "admin_test_results_fly\\refresh_tokens.json",
+    "headers_file": "admin_test_results_fly\\refresh_tokens_headers.txt"
+  }
+}

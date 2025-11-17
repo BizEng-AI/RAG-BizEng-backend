@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel, validator
+from sqlalchemy.orm import Session
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import SearchParams, Filter, FieldCondition, MatchValue
@@ -91,6 +92,7 @@ print("[startup] app.py reloaded OK", flush=True)
 
 # Initialize database on startup
 from db_init import init_db
+from db import get_db
 
 @app.on_event("startup")
 def startup_event():
@@ -117,10 +119,14 @@ def version():
 
 # Import auth routers
 from routers import auth, me, admin, tracking
+from routers import admin_monitor
 app.include_router(auth.router)
 app.include_router(me.router)
 app.include_router(admin.router)
 app.include_router(tracking.router)
+app.include_router(admin_monitor.router)
+
+print("[startup] ✅ Auth routers registered: /auth, /me, /admin, /tracking, /admin/monitor", flush=True)
 
 # Import and include roleplay router
 from roleplay_api import router as roleplay_router
@@ -455,13 +461,33 @@ from tracking import track
 from deps import get_optional_user
 
 @app.post("/chat", response_model=ChatRespDto)
-async def chat(req: ChatReqDto, user = Depends(get_optional_user)) -> ChatRespDto:
+async def chat(req: ChatReqDto, user = Depends(get_optional_user), db: Session = Depends(get_db)) -> ChatRespDto:
     """
     Free chat mode - conversational AI for business English learning
     Uses OpenAI to provide natural assistance without strict RAG grounding
     """
+    from routers.tracking import create_attempt_internal, finish_attempt_internal
+    from datetime import datetime
+
+    start_time = datetime.utcnow()
+    attempt = None
+
     try:
         print(f"[chat] Received {len(req.messages)} messages", flush=True)
+
+        # Create attempt record
+        if user:
+            try:
+                attempt = create_attempt_internal(
+                    db=db,
+                    user_id=user.id,
+                    exercise_type="chat",
+                    exercise_id=f"chat_{start_time.isoformat()}",
+                    extra_metadata={"message_count": len(req.messages)}
+                )
+                print(f"[chat] Created attempt ID: {attempt.id}", flush=True)
+            except Exception as e:
+                print(f"[chat] Warning: Failed to create attempt: {e}", flush=True)
 
         # Convert messages to OpenAI format
         messages = [{"role": msg.role, "content": msg.content} for msg in req.messages]
@@ -512,6 +538,24 @@ async def chat(req: ChatReqDto, user = Depends(get_optional_user)) -> ChatRespDt
 
         # SANITIZE logging
         print(f"[chat] Response generated ({len(ai_message)} chars)", flush=True)
+
+        # Finish attempt
+        if attempt:
+            try:
+                duration = int((datetime.utcnow() - start_time).total_seconds())
+                finish_attempt_internal(
+                    db=db,
+                    attempt_id=attempt.id,
+                    duration_seconds=duration,
+                    score=None,  # No scoring for chat
+                    extra_metadata={
+                        "response_length": len(ai_message),
+                        "total_messages": len(messages)
+                    }
+                )
+                print(f"[chat] ✅ Attempt {attempt.id} finished - Duration: {duration}s", flush=True)
+            except Exception as e:
+                print(f"[chat] Warning: Failed to finish attempt: {e}", flush=True)
 
         # Instrument: chat message produced
         try:
@@ -919,7 +963,9 @@ def generate_pronunciation_feedback(
 @app.post("/pronunciation/assess", response_model=PronunciationResult)
 async def assess_pronunciation(
     audio: UploadFile = File(...),
-    reference_text: str = Form(...)
+    reference_text: str = Form(...),
+    user = Depends(get_optional_user),
+    db: Session = Depends(get_db)
 ):
     """
     Assess pronunciation of uploaded audio against reference text.
@@ -935,9 +981,29 @@ async def assess_pronunciation(
     Returns:
         Detailed pronunciation scores and feedback
     """
+    from routers.tracking import create_attempt_internal, finish_attempt_internal
+    from datetime import datetime
+
+    start_time = datetime.utcnow()
+    attempt = None
     temp_audio_path = None
+
     try:
         print(f"[pronunciation] Assessing audio for: '{reference_text}'", flush=True)
+
+        # Create attempt record
+        if user:
+            try:
+                attempt = create_attempt_internal(
+                    db=db,
+                    user_id=user.id,
+                    exercise_type="pronunciation",
+                    exercise_id=f"pron_{start_time.isoformat()}",
+                    extra_metadata={"reference_text": reference_text[:100]}  # First 100 chars only
+                )
+                print(f"[pronunciation] Created attempt ID: {attempt.id}", flush=True)
+            except Exception as e:
+                print(f"[pronunciation] Warning: Failed to create attempt: {e}", flush=True)
 
         # Save uploaded audio to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
@@ -1043,6 +1109,26 @@ async def assess_pronunciation(
             print(f"[pronunciation] Feedback: {feedback[:100]}...", flush=True)
             if detailed_tips:
                 print(f"[pronunciation] Generated {len(detailed_tips)} detailed tips", flush=True)
+
+            # Finish attempt with score
+            if attempt:
+                try:
+                    duration = int((datetime.utcnow() - start_time).total_seconds())
+                    finish_attempt_internal(
+                        db=db,
+                        attempt_id=attempt.id,
+                        duration_seconds=duration,
+                        score=overall_score,
+                        passed=overall_score >= 70.0,  # 70% is passing
+                        extra_metadata={
+                            "accuracy": pronunciation_result.accuracy_score,
+                            "fluency": pronunciation_result.fluency_score,
+                            "completeness": pronunciation_result.completeness_score
+                        }
+                    )
+                    print(f"[pronunciation] ✅ Attempt {attempt.id} finished - Score: {overall_score:.1f}, Duration: {duration}s", flush=True)
+                except Exception as e:
+                    print(f"[pronunciation] Warning: Failed to finish attempt: {e}", flush=True)
 
             return PronunciationResult(
                 transcript=result.text,

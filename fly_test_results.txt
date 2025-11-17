@@ -1,0 +1,42 @@
+BASE: https://bizeng-server.fly.dev
+
+-- health & version --
+GET /health -> 200
+{'status': 'ok', 'service': 'bizeng-server'}
+GET /version -> 200
+{'version': '1.0.0', 'features': ['auth', 'roleplay', 'chat', 'pronunciation', 'admin_analytics']}
+
+-- chat & ask --
+POST /chat -> 200
+{'answer': "Hello! I'm here and ready to help you with any business English questions or concerns you may have. How can I assist you today?", 'sources': []}
+POST /ask -> 200
+{'answer': 'The stages of a business meeting typically include:\n\n1. Opening the meeting: This involves greeting the participants, setting the agenda, and stating the objectives of the meeting.\n\n2. Discussion: This is the main part of the meeting where the agenda items are discussed, decisions are made, and actions are assigned.\n\n3. Decision-making: This stage involves reaching a consensus on the discussed topics, making decisions, and setting action plans.\n\n4. Closing the meeting: This includes summarizing the key points discussed, confirming action items, and setting the date for the next meeting if necessary.\n\nRemember to use appropriate business English expressions and etiquette throughout the meeting, such as using diplomatic language, active listening, and respectful communication.', 'sources': ['book_1_ocr', 'book_1_ocr', 'book_1_ocr']}
+
+-- pronunciation test --
+GET /pronunciation/test -> 200
+{'status': 'ok', 'region': 'eastasia', 'service': 'Azure Speech Service', 'features': ['Pronunciation Assessment', 'Word-level scoring', 'Fluency analysis', 'Accuracy measurement']}
+
+-- roleplay --
+GET /roleplay/scenarios -> 200
+{'scenarios': [{'id': 'job_interview', 'title': 'Job Interview', 'description': 'Practice interviewing for a business position', 'difficulty': 'intermediate', 'stages': 4}, {'id': 'client_meeting', 'title': 'Client Meeting', 'description': 'Present a proposal to a potential client', 'difficulty': 'advanced', 'stages': 5}, {'id': 'customer_complaint', 'title': 'Customer Complaint', 'description': 'Handle an unhappy customer professionally', 'difficulty': 'beginner', 'stages': 4}, {'id': 'team_meeting', 'title': 'Team Meeting', 'description': 'Lead a team meeting and address performance issues', 'difficulty': 'advanced', 'stages': 4}, {'id': 'business_call', 'title': 'Business Phone Call', 'description': 'Make a professional phone call to a supplier', 'difficulty': 'beginner', 'stages': 3}]}
+POST /roleplay/start -> 200
+{'session_id': 'f077c537-1e10-4fc0-b268-b85b7cbef212', 'scenario_title': 'Job Interview', 'scenario_description': 'Practice interviewing for a business position', 'context': 'You are interviewing for a Marketing Manager position at a tech company.', 'student_role': 'Job Candidate', 'ai_role': 'HR Manager / Interviewer', 'current_stage': 'greeting', 'initial_message': "Good morning! Thank you for coming in today. Please, have a seat. I'm looking forward to learning more about you and your experience. Shall we get started?"}
+POST /roleplay/turn -> 200
+{'ai_message': "It seems like there might be a small issue with your message. Can you please clarify or restate your response?\n\n✅ Great! Let's move to the next part.", 'correction': {'has_errors': True, 'errors': [{'type': 'pragmatic', 'incorrect': '"Hi, test turn."', 'correct': 'Hello, my name is [Your Name]. I am excited to interview for the Marketing Manager position at your tech company.', 'explanation': 'The original message lacks professionalism and coherence.'}], 'feedback': 'Priority: high. Keep practicing!'}, 'current_stage': 'experience_discussion', 'is_completed': False, 'feedback': None}
+
+-- auth flows --
+registering ci_test+9889c41e@example.com
+POST /auth/register -> 201
+{'access_token': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjaV90ZXN0Kzk4ODljNDFlQGV4YW1wbGUuY29tIiwicm9sZXMiOlsic3R1ZGVudCJdLCJpYXQiOjE3NjI5ODQ1ODMsImV4cCI6MTc2Mjk4NTQ4MywidHlwZSI6ImFjY2VzcyJ9.ClWx-iHU70-xnfbDi6yJ-GYBOWcGvcZ2ShgGiKGopGs', 'refresh_token': '6c668746cbb3429d999c91134970947f', 'token_type': 'bearer'}
+POST /auth/refresh -> 200
+{'access_token': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjaV90ZXN0Kzk4ODljNDFlQGV4YW1wbGUuY29tIiwicm9sZXMiOlsic3R1ZGVudCJdLCJpYXQiOjE3NjI5ODQ1ODMsImV4cCI6MTc2Mjk4NTQ4MywidHlwZSI6ImFjY2VzcyJ9.ClWx-iHU70-xnfbDi6yJ-GYBOWcGvcZ2ShgGiKGopGs', 'refresh_token': '3cd15875e5ff4eb3ac2e55760a2f559e', 'token_type': 'bearer'}
+
+-- tracking --
+POST /tracking/attempts -> 201
+{'id': 9, 'user_id': 22, 'exercise_type': 'roleplay', 'exercise_id': 'f077c537-1e10-4fc0-b268-b85b7cbef212', 'started_at': '2025-11-12T21:56:24.435780Z', 'finished_at': None, 'duration_seconds': None, 'score': None, 'passed': None, 'extra_metadata': {}}
+PATCH /tracking/attempts/9 -> 200
+{'id': 9, 'user_id': 22, 'exercise_type': 'roleplay', 'exercise_id': 'f077c537-1e10-4fc0-b268-b85b7cbef212', 'started_at': '2025-11-12T21:56:24.435780Z', 'finished_at': '2025-11-12T21:56:26.124476Z', 'duration_seconds': 45, 'score': 0.9, 'passed': None, 'extra_metadata': {}}
+POST /tracking/events -> 201
+{'id': 9, 'user_id': 22, 'event_type': 'opened_chat', 'feature': 'chat', 'timestamp': '2025-11-12T21:56:26.832478Z', 'extra_metadata': {'screen': 'chat'}}
+
+DONE

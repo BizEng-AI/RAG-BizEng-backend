@@ -17,6 +17,112 @@ from tracking import track
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
 
+# ============================================================================
+# INTERNAL HELPERS (for exercise endpoints to call directly)
+# ============================================================================
+
+def create_attempt_internal(
+    db: Session,
+    user_id: int,
+    exercise_type: str,
+    exercise_id: str,
+    extra_metadata: dict = None
+) -> ExerciseAttempt:
+    """
+    Internal helper to create an exercise attempt without going through HTTP endpoint.
+    Used by chat/roleplay/pronunciation endpoints to record attempts.
+
+    Args:
+        db: Database session
+        user_id: ID of user doing the exercise
+        exercise_type: "chat", "roleplay", or "pronunciation"
+        exercise_id: Unique identifier for this specific exercise instance
+        extra_metadata: Optional additional data
+
+    Returns:
+        Created ExerciseAttempt object
+    """
+    attempt = ExerciseAttempt(
+        user_id=user_id,
+        exercise_type=exercise_type,
+        exercise_id=exercise_id,
+        started_at=datetime.utcnow(),
+        extra_metadata=extra_metadata
+    )
+
+    db.add(attempt)
+    db.commit()
+    db.refresh(attempt)
+
+    # Instrument
+    try:
+        track(user_id, "exercise_started", feature=exercise_type, exercise_id=exercise_id)
+    except Exception:
+        pass
+
+    return attempt
+
+
+def finish_attempt_internal(
+    db: Session,
+    attempt_id: int,
+    duration_seconds: int = None,
+    score: float = None,
+    passed: bool = None,
+    extra_metadata: dict = None
+) -> None:
+    """
+    Internal helper to finish an exercise attempt.
+    Used by chat/roleplay/pronunciation endpoints to record completion.
+
+    Args:
+        db: Database session
+        attempt_id: ID of the attempt to finish
+        duration_seconds: How long the exercise took
+        score: Score achieved (0-100 for pronunciation, null for chat/roleplay)
+        passed: Whether the user passed (optional)
+        extra_metadata: Additional completion data
+    """
+    attempt = db.get(ExerciseAttempt, attempt_id)
+
+    if not attempt:
+        print(f"[tracking] Warning: Attempt {attempt_id} not found", flush=True)
+        return
+
+    # Update fields
+    attempt.finished_at = datetime.utcnow()
+
+    if duration_seconds is not None:
+        attempt.duration_seconds = duration_seconds
+
+    if score is not None:
+        attempt.score = score
+
+    if passed is not None:
+        attempt.passed = passed
+
+    if extra_metadata is not None:
+        if attempt.extra_metadata:
+            attempt.extra_metadata.update(extra_metadata)
+        else:
+            attempt.extra_metadata = extra_metadata
+
+    db.commit()
+
+    # Instrument completion
+    try:
+        track(
+            attempt.user_id,
+            "exercise_completed",
+            feature=attempt.exercise_type,
+            exercise_id=attempt.exercise_id,
+            duration_seconds=duration_seconds,
+            score=score
+        )
+    except Exception:
+        pass
+
+
 @router.post("/attempts", response_model=ExerciseAttemptOut, status_code=201)
 def start_attempt(
     payload: ExerciseAttemptIn,
