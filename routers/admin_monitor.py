@@ -511,7 +511,7 @@ def user_activity(user_id: int, days: int = 30, db: Session = Depends(get_db), _
 
 @router.get("/users_activity")
 def users_activity(days: int = 30, db: Session = Depends(get_db), _=Depends(require_admin)):
-    """Aggregate exercise stats per user for the lookback window."""
+    """Aggregate exercise stats per user for the lookback window. Returns ALL users, even those with zero attempts."""
     safe_days = _sanitize_days(days)
     sql = text(
         """
@@ -520,18 +520,18 @@ def users_activity(days: int = 30, db: Session = Depends(get_db), _=Depends(requ
             u.email,
             COALESCE(u.display_name, '') AS display_name,
             u.group_number,
-            COUNT(*) AS total_exercises,
-            COUNT(*) FILTER (WHERE ea.exercise_type = 'pronunciation') AS pronunciation_count,
-            COUNT(*) FILTER (WHERE ea.exercise_type = 'chat') AS chat_count,
-            COUNT(*) FILTER (WHERE ea.exercise_type = 'roleplay') AS roleplay_count,
+            COUNT(ea.id) AS total_exercises,
+            COUNT(ea.id) FILTER (WHERE ea.exercise_type = 'pronunciation') AS pronunciation_count,
+            COUNT(ea.id) FILTER (WHERE ea.exercise_type = 'chat') AS chat_count,
+            COUNT(ea.id) FILTER (WHERE ea.exercise_type = 'roleplay') AS roleplay_count,
             SUM(COALESCE(ea.duration_seconds, EXTRACT(EPOCH FROM (ea.finished_at - ea.started_at))::INT)) AS total_duration_seconds,
             AVG(CASE WHEN ea.exercise_type = 'pronunciation' THEN ea.score END) AS avg_pronunciation_score
-        FROM exercise_attempts ea
-        JOIN users u ON u.id = ea.user_id
-        WHERE (
-            ea.started_at IS NULL
-            OR ea.started_at >= (CURRENT_DATE - (:days * INTERVAL '1 day'))
-        )
+        FROM users u
+        LEFT JOIN exercise_attempts ea ON u.id = ea.user_id
+            AND (
+                ea.started_at IS NULL
+                OR ea.started_at >= (CURRENT_DATE - (:days * INTERVAL '1 day'))
+            )
         GROUP BY u.id, u.email, u.display_name, u.group_number
         ORDER BY u.group_number NULLS LAST, u.email
         """
