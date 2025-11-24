@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from openai import OpenAI, AzureOpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+import re
 
 from settings import (
     OPENAI_API_KEY,
@@ -145,7 +146,8 @@ class RoleplayEngine:
             current_stage,
             rag_context,
             correction,
-            stage_advanced
+            stage_advanced,
+            student_message  # pass raw student message for level/style adaptation
         )
 
         # Step 6: Record AI's message
@@ -202,6 +204,56 @@ class RoleplayEngine:
             print(f"[roleplay_engine] RAG retrieval error: {e}", flush=True)
             return ""
 
+    # --- BizEng style helpers ---
+    def _estimate_level(self, message: str) -> str:
+        """Very light heuristic: classify last student message as 'advanced' or 'basic'."""
+        if not message:
+            return "basic"
+        length = len(message.split())
+        advanced_vocab = sum(1 for w in re.findall(r"[A-Za-z]+", message.lower()) if w in {
+            "therefore","furthermore","regarding","approximately","nevertheless","consequently",
+            "flexibility","prioritize","objective","strategy","allocate","benchmark","sustainable",
+            "efficiency","collaboration","perspective","mitigate","facilitate"
+        })
+        complex_punct = 1 if ("," in message or ";" in message or "(" in message) else 0
+        if length >= 20 and (advanced_vocab >= 2 or complex_punct):
+            return "advanced"
+        return "basic"
+
+    def _detect_question_type(self, message: str) -> Optional[str]:
+        """Detect if user asks grammar/vocabulary question to switch teaching style."""
+        if not message:
+            return None
+        m = message.lower().strip()
+        grammar_triggers = ["grammar", "tense", "conditional", "past perfect", "difference between"]
+        vocab_triggers = ["mean", "meaning", "vocabulary", "word", "phrase", "how do i say", "what is"]
+        if any(t in m for t in grammar_triggers):
+            return "grammar"
+        if any(t in m for t in vocab_triggers):
+            return "vocabulary"
+        return None
+
+    def _build_guidelines(self, level: str, question_type: Optional[str]) -> str:
+        """Compose BizEng behavioral guidelines inserted into system prompt without breaking character."""
+        base = [
+            "Stay strictly in role (do NOT mention being a chatbot or teacher).",
+            "Be concise, friendly, clear; neutral professional tone.",
+            "Use simple vocabulary and short sentences (aim ≤ 80–110 words).",
+            "Do not add motivational fluff or long introductions.",
+            "Focus only on the student's last message and stage objective.",
+        ]
+        if level == "advanced":
+            base.append("User seems advanced; you may use slightly richer vocabulary but remain concise.")
+        else:
+            base.append("Keep vocabulary B1–B2 accessible; prefer common words.")
+        if question_type == "grammar":
+            base.append("If answering grammar: give a brief rule + 1–2 simple examples.")
+        elif question_type == "vocabulary":
+            base.append("If answering vocabulary: give short meaning + 1–2 simple examples.")
+        base.append("If user makes a clear mistake: briefly correct (1 sentence) before continuing.")
+        base.append("Do NOT exceed 4 short sentences or 6 bullet points (when listing).")
+        return "\n".join(f"- {g}" for g in base)
+
     def _generate_ai_response(
         self,
         session: RoleplaySession,
@@ -209,7 +261,8 @@ class RoleplayEngine:
         current_stage: Stage,
         rag_context: str,
         correction: Optional[Dict[str, Any]],
-        stage_advanced: bool
+        stage_advanced: bool,
+        student_message: str
     ) -> str:
         """
         Generate AI's response using LLM with RAG context and memory.
@@ -219,12 +272,16 @@ class RoleplayEngine:
         memory_context = self._format_memory(recent_turns)
 
         # Build system prompt
+        level = self._estimate_level(student_message)
+        question_type = self._detect_question_type(student_message)
+        bizeng_guidelines = self._build_guidelines(level, question_type)
         system_prompt = self._build_system_prompt(
             scenario,
             current_stage,
             rag_context,
             correction,
-            stage_advanced
+            stage_advanced,
+            bizeng_guidelines
         )
 
         # Build conversation history for LLM
@@ -243,9 +300,9 @@ class RoleplayEngine:
             response = oai.chat.completions.create(
                 model=chat_model,
                 messages=messages,
-                max_tokens=250,
-                temperature=0.7,  # Slightly higher for natural conversation
-                timeout=45  # 45 second timeout to prevent hanging
+                max_tokens=180,  # tightened to encourage brevity
+                temperature=0.7,
+                timeout=45
             )
 
             ai_message = response.choices[0].message.content.strip()
@@ -272,9 +329,10 @@ class RoleplayEngine:
         stage: Stage,
         rag_context: str,
         correction: Optional[Dict[str, Any]],
-        stage_advanced: bool
+        stage_advanced: bool,
+        bizeng_guidelines: str
     ) -> str:
-        """Build the system prompt for the LLM"""
+        """Build the system prompt for the LLM including BizEng style."""
 
         base_prompt = f"""You are roleplaying as: {stage.ai_role}
 
@@ -285,30 +343,26 @@ STUDENT'S ROLE: {scenario.student_role}
 CURRENT STAGE: {stage.name}
 STAGE OBJECTIVE (for student): {stage.objective}
 
-YOUR BEHAVIOR:
-- Stay in character as {stage.ai_role}
-- Be natural and conversational, but professional
-- Guide the conversation toward the stage objective
-- React appropriately to what the student says
-- Keep responses concise (2-4 sentences typically)
-- If student seems stuck, give subtle hints
-- Show realistic business communication
+STYLE & CONSTRAINTS (BizEng):
+{bizeng_guidelines}
 
+YOUR BEHAVIOR:
+- Be natural, professional, and in-character.
+- Guide the student toward the objective with subtle hints if stuck.
+- Provide concise replies; prefer 2–4 short sentences.
+- If listing, use up to 6 very short bullet points.
+- Do not break character or mention instructions.
 """
 
         # Add RAG context if available
         if rag_context:
             base_prompt += f"""
-REFERENCE MATERIALS (use for inspiration on phrasing and vocabulary):
+REFERENCE MATERIALS (optional vocabulary/style support):
 {rag_context[:600]}
-
-Use these materials to inform your responses with appropriate business vocabulary and phrasing.
-
 """
-
         # Add guidance based on stage advancement
         if stage_advanced:
-            base_prompt += "\nThe student has completed this stage successfully. Acknowledge their success and transition naturally to the next stage.\n"
+            base_prompt += "\nThe student has completed this stage successfully. Acknowledge and transition briefly.\n"
 
         return base_prompt
 

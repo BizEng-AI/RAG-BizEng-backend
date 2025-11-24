@@ -27,7 +27,7 @@ try:
         api_version=AZURE_OPENAI_API_VERSION,
         azure_endpoint=AZURE_OPENAI_ENDPOINT
     )
-    
+
     response = azure_client.chat.completions.create(
         model=AZURE_OPENAI_CHAT_DEPLOYMENT,
         messages=[
@@ -36,13 +36,12 @@ try:
         ],
         max_tokens=50
     )
-    
-    print(f"✅ WORKING!")
+
+    print("✅ WORKING!")
     print(f"   Deployment: {AZURE_OPENAI_CHAT_DEPLOYMENT}")
     print(f"   Response: {response.choices[0].message.content[:80]}...")
-    print(f"   Cost: ~80% cheaper than OpenAI!")
-print()
-
+    print("   Cost: ~80% cheaper than OpenAI!")
+    print()
 except Exception as e:
     print(f"❌ FAILED: {e}")
     print()
@@ -58,7 +57,7 @@ if AZURE_OPENAI_EMBEDDING_DEPLOYMENT:
             model=AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
             input="Test document"
         )
-        print(f"✅ Azure Embeddings WORKING!")
+        print("✅ Azure Embeddings WORKING!")
         print(f"   Deployment: {AZURE_OPENAI_EMBEDDING_DEPLOYMENT}")
         print()
     except Exception as e:
@@ -66,22 +65,21 @@ if AZURE_OPENAI_EMBEDDING_DEPLOYMENT:
         print("   Falling back to OpenAI...")
         print()
 
-# Test OpenAI embeddings fallback
-if not AZURE_OPENAI_EMBEDDING_DEPLOYMENT or True:
-    print("Testing OpenAI Embeddings (fallback)...")
-    try:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        response = openai_client.embeddings.create(
-            model=EMBED_MODEL,
-            input="Test document"
-        )
-        print(f"✅ OpenAI Embeddings WORKING!")
-        print(f"   Model: {EMBED_MODEL}")
-        print(f"   Note: This uses your OpenAI credits, not Azure")
-        print()
-    except Exception as e:
-        print(f"❌ OpenAI Embeddings FAILED: {e}")
-        print()
+# Test OpenAI embeddings fallback (always run to confirm)
+print("Testing OpenAI Embeddings (fallback)...")
+try:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    response = openai_client.embeddings.create(
+        model=EMBED_MODEL,
+        input="Test document"
+    )
+    print("✅ OpenAI Embeddings WORKING!")
+    print(f"   Model: {EMBED_MODEL}")
+    print("   Note: This uses your OpenAI credits, not Azure")
+    print()
+except Exception as e:
+    print(f"❌ OpenAI Embeddings FAILED: {e}")
+    print()
 
 print("=" * 70)
 print("SUMMARY")
@@ -107,4 +105,3 @@ print()
 print("Your server is ready to run with Azure OpenAI for chat!")
 print("Run: python app.py")
 print("=" * 70)
-
