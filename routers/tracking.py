@@ -3,7 +3,8 @@ Student tracking endpoints - log attempts and activity events
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy import func
 
 from db import get_db
 from deps import get_current_user, require_student
@@ -274,17 +275,36 @@ def log_event(
 @router.get("/my-attempts", response_model=list[ExerciseAttemptOut])
 def get_my_attempts(
     user: User = Depends(require_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    days: int = 30,
 ):
     """
-    Get my exercise attempts history
+    Get my exercise attempts history with optional pagination and day filter
 
     - Students can view their own progress
     - Ordered by most recent first
+    - Query params: limit, offset, days (last N days)
     """
-    attempts = db.query(ExerciseAttempt).filter(
-        ExerciseAttempt.user_id == user.id
-    ).order_by(ExerciseAttempt.started_at.desc()).all()
+    # sanitize inputs
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    try:
+        days = int(days)
+    except Exception:
+        days = 30
+    days = max(1, min(days, 365))
+
+    start = None
+    if days:
+        start = datetime.utcnow() - timedelta(days=days)
+
+    q = db.query(ExerciseAttempt).filter(ExerciseAttempt.user_id == user.id)
+    if start:
+        q = q.filter(ExerciseAttempt.started_at >= start)
+
+    attempts = q.order_by(ExerciseAttempt.started_at.desc()).offset(safe_offset).limit(safe_limit).all()
 
     return [
         ExerciseAttemptOut(
@@ -301,3 +321,74 @@ def get_my_attempts(
         )
         for a in attempts
     ]
+
+
+# Note: GET /tracking/attempts conflicts with POST /tracking/attempts
+# Android should use /tracking/my-attempts instead
+
+
+@router.get("/summary")
+def get_my_summary(
+    user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+    days: int = 30,
+):
+    """
+    Return compact summary of the current user's activity over the last `days` days.
+    """
+    try:
+        days = int(days)
+    except Exception:
+        days = 30
+    days = max(1, min(days, 365))
+    start = datetime.utcnow() - timedelta(days=days)
+
+    total_exercises = int(db.query(func.count(ExerciseAttempt.id)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.started_at >= start
+    ).scalar() or 0)
+
+    pronunciation_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.exercise_type == 'pronunciation',
+        ExerciseAttempt.started_at >= start
+    ).scalar() or 0)
+
+    chat_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.exercise_type == 'chat',
+        ExerciseAttempt.started_at >= start
+    ).scalar() or 0)
+
+    roleplay_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.exercise_type == 'roleplay',
+        ExerciseAttempt.started_at >= start
+    ).scalar() or 0)
+
+    # Sum duration_seconds (nullable)
+    total_duration = db.query(func.coalesce(func.sum(ExerciseAttempt.duration_seconds), 0)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.started_at >= start
+    ).scalar() or 0
+    total_duration = int(total_duration)
+
+    # Average pronunciation score (score is 0..1 in model)
+    avg_pron = db.query(func.avg(ExerciseAttempt.score)).filter(
+        ExerciseAttempt.user_id == user.id,
+        ExerciseAttempt.exercise_type == 'pronunciation',
+        ExerciseAttempt.started_at >= start
+    ).scalar()
+    avg_pron = float(avg_pron) if avg_pron is not None else None
+
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "group_number": getattr(user, 'group_number', None),
+        "total_exercises": total_exercises,
+        "pronunciation_count": pronunciation_count,
+        "chat_count": chat_count,
+        "roleplay_count": roleplay_count,
+        "total_duration_seconds": total_duration,
+        "avg_pronunciation_score": avg_pron
+    }

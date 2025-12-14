@@ -121,7 +121,11 @@ def refresh_token(payload: RefreshIn, db: Session = Depends(get_db)):
 
     - Rotates refresh token (old one is revoked)
     - Returns new access + refresh tokens
+    - Refresh tokens expire after 30 days
     """
+    from datetime import datetime, timezone
+    from settings import REFRESH_EXPIRES
+
     # Find refresh token
     token_row = db.query(RefreshToken).filter(
         RefreshToken.token == payload.refresh_token,
@@ -132,6 +136,18 @@ def refresh_token(payload: RefreshIn, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
+        )
+
+    # Check if token has expired (30 days)
+    now = datetime.now(timezone.utc)
+    token_age = now - token_row.created_at.replace(tzinfo=timezone.utc)
+    if token_age > REFRESH_EXPIRES:
+        # Mark as revoked and reject
+        token_row.revoked = True
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired"
         )
 
     # Get user and roles

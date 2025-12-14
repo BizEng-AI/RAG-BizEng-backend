@@ -1,7 +1,0 @@
-date: Sat, 15 Nov 2025 15:22:27 GMT
-server: Fly/3807f396 (2025-11-11)
-content-encoding: gzip
-content-type: application/json
-transfer-encoding: chunked
-via: 1.1 fly.io, 1.1 fly.io
-fly-request-id: 01KA41R16FVMKQZFCK2Z0MG5MG-arn

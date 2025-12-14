@@ -1,8 +1,0 @@
-{
-  "model": "gpt-4o-mini",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user",   "content": "Say hello in one word."}
-  ],
-  "max_tokens": 8
-}
