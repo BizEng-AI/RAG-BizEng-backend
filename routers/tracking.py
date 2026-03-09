@@ -1,61 +1,144 @@
+﻿"""
+Student tracking endpoints - log attempts and activity events.
+Includes compatibility responses used by the Android client.
 """
-Student tracking endpoints - log attempts and activity events
-"""
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from db import get_db
-from deps import get_current_user, require_student
-from models import User, ExerciseAttempt, ActivityEvent
+from deps import require_student
+from models import ActivityEvent, ExerciseAttempt, User
 from schemas import (
-    ExerciseAttemptIn, ExerciseAttemptUpdate, ExerciseAttemptOut,
-    ActivityEventIn, ActivityEventOut
+    ActivityEventCompatOut,
+    ActivityEventIn,
+    ExerciseAttemptIn,
+    ExerciseAttemptOut,
+    ExerciseAttemptUpdate,
+    ProgressSummaryOut,
+    ProgressTotalsOut,
+    ProgressTypeStatsOut,
+    TrackingAttemptCompatOut,
 )
 from tracking import track
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+
+def _infer_feature(exercise_id: Optional[str], payload: Optional[dict], explicit_feature: Optional[str]) -> str:
+    if explicit_feature:
+        return explicit_feature
+    if payload and payload.get("exercise_type"):
+        return str(payload["exercise_type"])
+    normalized = (exercise_id or "").lower()
+    if "roleplay" in normalized:
+        return "roleplay"
+    if "pron" in normalized:
+        return "pronunciation"
+    if "chat" in normalized:
+        return "chat"
+    if "rag" in normalized or "ask" in normalized:
+        return "rag_qa"
+    return "general"
+
+
+def _attempt_status(attempt: ExerciseAttempt) -> str:
+    metadata = attempt.extra_metadata or {}
+    if isinstance(metadata, dict) and metadata.get("status"):
+        return str(metadata["status"])
+    if attempt.finished_at is None:
+        return "started"
+    if attempt.passed is False:
+        return "abandoned"
+    return "completed"
+
+
+
+def _serialize_attempt_compat(attempt: ExerciseAttempt) -> dict:
+    status = _attempt_status(attempt)
+    return {
+        "id": str(attempt.id),
+        "user_id": attempt.user_id,
+        "exercise_type": attempt.exercise_type,
+        "exercise_id": attempt.exercise_id,
+        "started_at": attempt.started_at,
+        "finished_at": attempt.finished_at,
+        "duration_seconds": attempt.duration_seconds,
+        "duration_sec": attempt.duration_seconds,
+        "score": attempt.score,
+        "passed": attempt.passed,
+        "extra_metadata": attempt.extra_metadata,
+        "status": status,
+    }
+
+
+
+def _serialize_event_compat(event: ActivityEvent) -> dict:
+    return {
+        "id": event.id,
+        "event_type": event.event_type,
+        "ts": event.timestamp,
+        "feature": event.feature,
+        "timestamp": event.timestamp,
+        "extra_metadata": event.extra_metadata,
+    }
+
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+
+def _recent_attempts_query(db: Session, user_id: int, start: Optional[datetime], end: Optional[datetime]):
+    query = db.query(ExerciseAttempt).filter(ExerciseAttempt.user_id == user_id)
+    if start is not None:
+        query = query.filter(ExerciseAttempt.started_at >= start)
+    if end is not None:
+        query = query.filter(ExerciseAttempt.started_at <= end)
+    return query.order_by(ExerciseAttempt.started_at.desc())
+
+
 # ============================================================================
 # INTERNAL HELPERS (for exercise endpoints to call directly)
 # ============================================================================
+
 
 def create_attempt_internal(
     db: Session,
     user_id: int,
     exercise_type: str,
     exercise_id: str,
-    extra_metadata: dict = None
+    extra_metadata: dict = None,
 ) -> ExerciseAttempt:
-    """
-    Internal helper to create an exercise attempt without going through HTTP endpoint.
-    Used by chat/roleplay/pronunciation endpoints to record attempts.
-
-    Args:
-        db: Database session
-        user_id: ID of user doing the exercise
-        exercise_type: "chat", "roleplay", or "pronunciation"
-        exercise_id: Unique identifier for this specific exercise instance
-        extra_metadata: Optional additional data
-
-    Returns:
-        Created ExerciseAttempt object
-    """
     attempt = ExerciseAttempt(
         user_id=user_id,
         exercise_type=exercise_type,
         exercise_id=exercise_id,
-        started_at=datetime.utcnow(),
-        extra_metadata=extra_metadata
+        started_at=_utcnow(),
+        extra_metadata=extra_metadata,
     )
 
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
 
-    # Instrument
     try:
         track(user_id, "exercise_started", feature=exercise_type, exercise_id=exercise_id)
     except Exception:
@@ -64,53 +147,34 @@ def create_attempt_internal(
     return attempt
 
 
+
 def finish_attempt_internal(
     db: Session,
     attempt_id: int,
     duration_seconds: int = None,
     score: float = None,
     passed: bool = None,
-    extra_metadata: dict = None
+    extra_metadata: dict = None,
 ) -> None:
-    """
-    Internal helper to finish an exercise attempt.
-    Used by chat/roleplay/pronunciation endpoints to record completion.
-
-    Args:
-        db: Database session
-        attempt_id: ID of the attempt to finish
-        duration_seconds: How long the exercise took
-        score: Score achieved (0-100 for pronunciation, null for chat/roleplay)
-        passed: Whether the user passed (optional)
-        extra_metadata: Additional completion data
-    """
     attempt = db.get(ExerciseAttempt, attempt_id)
-
     if not attempt:
-        print(f"[tracking] Warning: Attempt {attempt_id} not found", flush=True)
+        print(f"[tracking] warning: attempt {attempt_id} not found", flush=True)
         return
 
-    # Update fields
-    attempt.finished_at = datetime.utcnow()
-
+    attempt.finished_at = _utcnow()
     if duration_seconds is not None:
         attempt.duration_seconds = duration_seconds
-
     if score is not None:
         attempt.score = score
-
     if passed is not None:
         attempt.passed = passed
-
     if extra_metadata is not None:
-        if attempt.extra_metadata:
-            attempt.extra_metadata.update(extra_metadata)
-        else:
-            attempt.extra_metadata = extra_metadata
+        current = attempt.extra_metadata or {}
+        current.update(extra_metadata)
+        attempt.extra_metadata = current
 
     db.commit()
 
-    # Instrument completion
     try:
         track(
             attempt.user_id,
@@ -118,157 +182,179 @@ def finish_attempt_internal(
             feature=attempt.exercise_type,
             exercise_id=attempt.exercise_id,
             duration_seconds=duration_seconds,
-            score=score
+            score=score,
         )
     except Exception:
         pass
 
 
-@router.post("/attempts", response_model=ExerciseAttemptOut, status_code=201)
+@router.post("/attempts", response_model=TrackingAttemptCompatOut, status_code=201)
 def start_attempt(
     payload: ExerciseAttemptIn,
     user: User = Depends(require_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Start a new exercise attempt
-
-    - Called when student begins an exercise
-    - Returns attempt ID for later completion
-
-    Privacy: NO content stored, only metadata
-    """
     attempt = ExerciseAttempt(
         user_id=user.id,
         exercise_type=payload.exercise_type,
         exercise_id=payload.exercise_id,
-        extra_metadata=payload.extra_metadata
+        extra_metadata=payload.extra_metadata,
     )
 
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
 
-    # instrument
     try:
         track(user.id, "exercise_started", feature=attempt.exercise_type, exercise_id=attempt.exercise_id)
     except Exception:
         pass
 
-    return ExerciseAttemptOut(
-        id=attempt.id,
-        user_id=attempt.user_id,
-        exercise_type=attempt.exercise_type,
-        exercise_id=attempt.exercise_id,
-        started_at=attempt.started_at,
-        finished_at=attempt.finished_at,
-        duration_seconds=attempt.duration_seconds,
-        score=attempt.score,
-        passed=attempt.passed,
-        extra_metadata=attempt.extra_metadata
-    )
+    return _serialize_attempt_compat(attempt)
 
 
-@router.patch("/attempts/{attempt_id}", response_model=ExerciseAttemptOut)
+@router.patch("/attempts/{attempt_id}", response_model=TrackingAttemptCompatOut)
 def finish_attempt(
     attempt_id: int,
     payload: ExerciseAttemptUpdate,
     user: User = Depends(require_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Complete an exercise attempt with final score/duration
-
-    - Updates attempt with completion data
-    - Only owner can update their attempts
-    """
     attempt = db.get(ExerciseAttempt, attempt_id)
-
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
-
     if attempt.user_id != user.id:
         raise HTTPException(status_code=403, detail="Not your attempt")
 
-    # Update fields
-    if payload.finished_at:
+    status_value = (payload.status or "").strip().lower()
+
+    if payload.finished_at is not None:
         attempt.finished_at = payload.finished_at
-    else:
-        attempt.finished_at = datetime.utcnow()
+    elif status_value in {"completed", "abandoned"} or any(
+        value is not None for value in (payload.duration_seconds, payload.score, payload.passed)
+    ):
+        attempt.finished_at = _utcnow()
 
     if payload.duration_seconds is not None:
         attempt.duration_seconds = payload.duration_seconds
-
     if payload.score is not None:
         attempt.score = payload.score
-
     if payload.passed is not None:
         attempt.passed = payload.passed
 
-    if payload.extra_metadata is not None:
-        attempt.extra_metadata = payload.extra_metadata
+    metadata = attempt.extra_metadata or {}
+    if payload.extra_metadata:
+        metadata.update(payload.extra_metadata)
+    if status_value:
+        metadata["status"] = status_value
+        if status_value == "abandoned" and payload.passed is None:
+            attempt.passed = False
+    attempt.extra_metadata = metadata or None
+
     db.commit()
     db.refresh(attempt)
 
-    # instrument completion
     try:
-        track(user.id, "exercise_submitted", feature=attempt.exercise_type,
-              exercise_id=attempt.exercise_id, score=attempt.score, duration_seconds=attempt.duration_seconds)
+        event_name = "exercise_abandoned" if status_value == "abandoned" else "exercise_submitted"
+        track(
+            user.id,
+            event_name,
+            feature=attempt.exercise_type,
+            exercise_id=attempt.exercise_id,
+            score=attempt.score,
+            duration_seconds=attempt.duration_seconds,
+            status=status_value or _attempt_status(attempt),
+        )
     except Exception:
         pass
 
-    return ExerciseAttemptOut(
-        id=attempt.id,
-        user_id=attempt.user_id,
-        exercise_type=attempt.exercise_type,
-        exercise_id=attempt.exercise_id,
-        started_at=attempt.started_at,
-        finished_at=attempt.finished_at,
-        duration_seconds=attempt.duration_seconds,
-        score=attempt.score,
-        passed=attempt.passed,
-        extra_metadata=attempt.extra_metadata
-    )
+    return _serialize_attempt_compat(attempt)
 
 
-@router.post("/events", response_model=ActivityEventOut, status_code=201)
+@router.post("/events", response_model=ActivityEventCompatOut, status_code=201)
 def log_event(
     payload: ActivityEventIn,
     user: User = Depends(require_student),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Log an activity event
+    feature = _infer_feature(payload.exercise_id, payload.payload, payload.feature)
+    metadata = {}
+    if payload.extra_metadata:
+        metadata.update(payload.extra_metadata)
+    if payload.payload:
+        metadata.update(payload.payload)
+    if payload.exercise_id:
+        metadata.setdefault("exercise_id", payload.exercise_id)
 
-    - Lightweight tracking of feature usage
-    - Examples: "opened_chat", "started_roleplay", "completed_pronunciation"
-
-    Privacy: NO content stored, only event type and timestamp
-    """
     event = ActivityEvent(
         user_id=user.id,
         event_type=payload.event_type,
-        feature=payload.feature,
-        extra_metadata=payload.extra_metadata
+        feature=feature,
+        extra_metadata=metadata or None,
     )
 
     db.add(event)
     db.commit()
     db.refresh(event)
 
-    # instrument (also track) - duplicate to tracking table for consistency
     try:
-        track(user.id, payload.event_type, feature=payload.feature, **(payload.extra_metadata or {}))
+        track(user.id, payload.event_type, feature=feature, **metadata)
     except Exception:
         pass
 
-    return ActivityEventOut(
-        id=event.id,
-        user_id=event.user_id,
-        event_type=event.event_type,
-        feature=event.feature,
-        timestamp=event.timestamp,
-        extra_metadata=event.extra_metadata
+    return _serialize_event_compat(event)
+
+
+@router.get("/my-progress", response_model=ProgressSummaryOut)
+def get_my_progress(
+    user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+    from_: Optional[str] = Query(default=None, alias="from"),
+    to: Optional[str] = Query(default=None),
+    days: Optional[int] = Query(default=None, ge=1, le=365),
+):
+    end = _parse_timestamp(to)
+    if days is not None:
+        start = _utcnow() - timedelta(days=days)
+    else:
+        start = _parse_timestamp(from_)
+        if start is None and end is None:
+            start = _utcnow() - timedelta(days=30)
+
+    attempts = _recent_attempts_query(db, user.id, start, end).all()
+    completed_attempts = [attempt for attempt in attempts if attempt.finished_at is not None]
+    scored_attempts = [attempt.score for attempt in attempts if attempt.score is not None]
+
+    by_type: dict[str, ProgressTypeStatsOut] = {}
+    for exercise_type, count, avg_score in (
+        db.query(
+            ExerciseAttempt.exercise_type,
+            func.count(ExerciseAttempt.id),
+            func.avg(ExerciseAttempt.score),
+        )
+        .filter(ExerciseAttempt.user_id == user.id)
+        .filter(ExerciseAttempt.started_at >= start if start is not None else True)
+        .filter(ExerciseAttempt.started_at <= end if end is not None else True)
+        .group_by(ExerciseAttempt.exercise_type)
+        .all()
+    ):
+        by_type[exercise_type] = ProgressTypeStatsOut(
+            attempts=int(count or 0),
+            avg_score=float(avg_score or 0.0),
+        )
+
+    total_duration_seconds = sum(attempt.duration_seconds or 0 for attempt in attempts)
+    recent_attempts = [_serialize_attempt_compat(attempt) for attempt in attempts[:10]]
+
+    return ProgressSummaryOut(
+        totals=ProgressTotalsOut(
+            attempts=len(attempts),
+            completed=len(completed_attempts),
+            avg_score=float(sum(scored_attempts) / len(scored_attempts)) if scored_attempts else 0.0,
+            total_minutes=total_duration_seconds // 60,
+        ),
+        by_type=by_type,
+        recent_attempts=recent_attempts,
     )
 
 
@@ -280,51 +366,35 @@ def get_my_attempts(
     offset: int = 0,
     days: int = 30,
 ):
-    """
-    Get my exercise attempts history with optional pagination and day filter
-
-    - Students can view their own progress
-    - Ordered by most recent first
-    - Query params: limit, offset, days (last N days)
-    """
-    # sanitize inputs
     safe_limit = max(1, min(limit, 200))
     safe_offset = max(0, offset)
-    try:
-        days = int(days)
-    except Exception:
-        days = 30
-    days = max(1, min(days, 365))
+    safe_days = max(1, min(int(days), 365))
+    start = _utcnow() - timedelta(days=safe_days)
 
-    start = None
-    if days:
-        start = datetime.utcnow() - timedelta(days=days)
-
-    q = db.query(ExerciseAttempt).filter(ExerciseAttempt.user_id == user.id)
-    if start:
-        q = q.filter(ExerciseAttempt.started_at >= start)
-
-    attempts = q.order_by(ExerciseAttempt.started_at.desc()).offset(safe_offset).limit(safe_limit).all()
+    attempts = (
+        db.query(ExerciseAttempt)
+        .filter(ExerciseAttempt.user_id == user.id, ExerciseAttempt.started_at >= start)
+        .order_by(ExerciseAttempt.started_at.desc())
+        .offset(safe_offset)
+        .limit(safe_limit)
+        .all()
+    )
 
     return [
         ExerciseAttemptOut(
-            id=a.id,
-            user_id=a.user_id,
-            exercise_type=a.exercise_type,
-            exercise_id=a.exercise_id,
-            started_at=a.started_at,
-            finished_at=a.finished_at,
-            duration_seconds=a.duration_seconds,
-            score=a.score,
-            passed=a.passed,
-            extra_metadata=a.extra_metadata
+            id=attempt.id,
+            user_id=attempt.user_id,
+            exercise_type=attempt.exercise_type,
+            exercise_id=attempt.exercise_id,
+            started_at=attempt.started_at,
+            finished_at=attempt.finished_at,
+            duration_seconds=attempt.duration_seconds,
+            score=attempt.score,
+            passed=attempt.passed,
+            extra_metadata=attempt.extra_metadata,
         )
-        for a in attempts
+        for attempt in attempts
     ]
-
-
-# Note: GET /tracking/attempts conflicts with POST /tracking/attempts
-# Android should use /tracking/my-attempts instead
 
 
 @router.get("/summary")
@@ -333,62 +403,71 @@ def get_my_summary(
     db: Session = Depends(get_db),
     days: int = 30,
 ):
-    """
-    Return compact summary of the current user's activity over the last `days` days.
-    """
-    try:
-        days = int(days)
-    except Exception:
-        days = 30
-    days = max(1, min(days, 365))
-    start = datetime.utcnow() - timedelta(days=days)
+    safe_days = max(1, min(int(days), 365))
+    start = _utcnow() - timedelta(days=safe_days)
 
-    total_exercises = int(db.query(func.count(ExerciseAttempt.id)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.started_at >= start
-    ).scalar() or 0)
-
-    pronunciation_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.exercise_type == 'pronunciation',
-        ExerciseAttempt.started_at >= start
-    ).scalar() or 0)
-
-    chat_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.exercise_type == 'chat',
-        ExerciseAttempt.started_at >= start
-    ).scalar() or 0)
-
-    roleplay_count = int(db.query(func.count(ExerciseAttempt.id)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.exercise_type == 'roleplay',
-        ExerciseAttempt.started_at >= start
-    ).scalar() or 0)
-
-    # Sum duration_seconds (nullable)
-    total_duration = db.query(func.coalesce(func.sum(ExerciseAttempt.duration_seconds), 0)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.started_at >= start
-    ).scalar() or 0
-    total_duration = int(total_duration)
-
-    # Average pronunciation score (score is 0..1 in model)
-    avg_pron = db.query(func.avg(ExerciseAttempt.score)).filter(
-        ExerciseAttempt.user_id == user.id,
-        ExerciseAttempt.exercise_type == 'pronunciation',
-        ExerciseAttempt.started_at >= start
-    ).scalar()
-    avg_pron = float(avg_pron) if avg_pron is not None else None
+    total_exercises = int(
+        db.query(func.count(ExerciseAttempt.id))
+        .filter(ExerciseAttempt.user_id == user.id, ExerciseAttempt.started_at >= start)
+        .scalar()
+        or 0
+    )
+    pronunciation_count = int(
+        db.query(func.count(ExerciseAttempt.id))
+        .filter(
+            ExerciseAttempt.user_id == user.id,
+            ExerciseAttempt.exercise_type == "pronunciation",
+            ExerciseAttempt.started_at >= start,
+        )
+        .scalar()
+        or 0
+    )
+    chat_count = int(
+        db.query(func.count(ExerciseAttempt.id))
+        .filter(
+            ExerciseAttempt.user_id == user.id,
+            ExerciseAttempt.exercise_type == "chat",
+            ExerciseAttempt.started_at >= start,
+        )
+        .scalar()
+        or 0
+    )
+    roleplay_count = int(
+        db.query(func.count(ExerciseAttempt.id))
+        .filter(
+            ExerciseAttempt.user_id == user.id,
+            ExerciseAttempt.exercise_type == "roleplay",
+            ExerciseAttempt.started_at >= start,
+        )
+        .scalar()
+        or 0
+    )
+    total_duration = int(
+        db.query(func.coalesce(func.sum(ExerciseAttempt.duration_seconds), 0))
+        .filter(ExerciseAttempt.user_id == user.id, ExerciseAttempt.started_at >= start)
+        .scalar()
+        or 0
+    )
+    avg_pron = (
+        db.query(func.avg(ExerciseAttempt.score))
+        .filter(
+            ExerciseAttempt.user_id == user.id,
+            ExerciseAttempt.exercise_type == "pronunciation",
+            ExerciseAttempt.started_at >= start,
+        )
+        .scalar()
+    )
 
     return {
         "user_id": user.id,
         "email": user.email,
-        "group_number": getattr(user, 'group_number', None),
+        "group_number": getattr(user, "group_number", None),
         "total_exercises": total_exercises,
         "pronunciation_count": pronunciation_count,
         "chat_count": chat_count,
         "roleplay_count": roleplay_count,
         "total_duration_seconds": total_duration,
-        "avg_pronunciation_score": avg_pron
+        "avg_pronunciation_score": float(avg_pron) if avg_pron is not None else None,
     }
+
+
