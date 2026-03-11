@@ -36,12 +36,13 @@ class RoleplayEngine:
             raise ValueError(f"Unknown scenario: {session.scenario_id}")
 
         if session.current_stage >= len(scenario.stages):
+            last_stage = scenario.stages[-1] if scenario.stages else None
             return {
                 "ai_message": scenario.success_message,
                 "correction": None,
-                "stage_info": None,
-                "stage_advanced": False,
+                "current_stage": last_stage.name if last_stage else "completed",
                 "is_completed": True,
+                "feedback": None,
             }
 
         current_stage = scenario.stages[session.current_stage]
@@ -71,10 +72,16 @@ class RoleplayEngine:
         )
 
         stage_advanced = False
+        just_finished = False          # last stage was completed this turn
         if should_advance:
+            was_last_stage = (session.current_stage == len(scenario.stages) - 1)
             session.advance_stage()
             stage_advanced = True
-            if session.current_stage < len(scenario.stages):
+            if was_last_stage:
+                # Mark that the scenario just finished so we can return
+                # a proper closing response instead of an abrupt exit.
+                just_finished = True
+            elif session.current_stage < len(scenario.stages):
                 current_stage = scenario.stages[session.current_stage]
 
         ai_message = self._generate_ai_response(
@@ -86,6 +93,12 @@ class RoleplayEngine:
             stage_advanced,
             student_message,
         )
+
+        # If the scenario just finished, append the success message
+        # but still include the AI's natural closing reply so the
+        # conversation does not feel cut short.
+        if just_finished:
+            ai_message = ai_message.rstrip() + "\n\n" + scenario.success_message
 
         session.add_turn("ai", ai_message, correction=correction)
         save_session(session)
@@ -236,8 +249,6 @@ class RoleplayEngine:
 
             if stage_advanced and not session.is_completed:
                 ai_message += "\n\nGood. Let's move to the next part."
-            elif session.is_completed:
-                ai_message = scenario.success_message
             return ai_message
         except Exception as exc:
             print(f"[roleplay_engine] generation error: {exc}", flush=True)

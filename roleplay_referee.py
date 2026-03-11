@@ -1,4 +1,4 @@
-﻿# roleplay_referee.py
+﻿﻿# roleplay_referee.py
 """
 Evaluates student responses and provides targeted corrections.
 Max 1 correction per turn to avoid overwhelming the student.
@@ -115,30 +115,70 @@ Analyze this message and provide feedback."""
         advance_criteria: str,
         stage_keywords: List[str],
     ) -> bool:
-        message_lower = student_message.lower()
+        """Decide whether the student's message satisfies the current stage.
 
-        if len(student_message.strip()) < 10:
+        The check is deliberately conservative so scenarios do not end
+        after only one or two short messages.  We require:
+          - a minimum message length (at least 15 words), AND
+          - at least TWO matching stage keywords, AND
+          - at least one criteria-specific signal.
+
+        A single condition alone is never enough.
+        """
+        message_lower = student_message.lower()
+        word_count = len(student_message.split())
+
+        # Too short — never advance
+        if word_count < 15:
             return False
 
         keyword_matches = sum(1 for kw in stage_keywords if kw.lower() in message_lower)
         criteria_lower = advance_criteria.lower()
 
-        if "introduce" in criteria_lower and any(word in message_lower for word in ["my name", "i'm", "i am", "hello", "hi"]):
+        # Need at least 2 keyword hits to be considered on-topic
+        if keyword_matches < 2:
+            return False
+
+        # Criteria-specific signals (must match the criteria string)
+        criteria_met = False
+
+        if "opinion" in criteria_lower or "introduce" in criteria_lower:
+            criteria_met = any(phrase in message_lower for phrase in [
+                "i think", "i believe", "in my opinion", "my name", "i am", "i'm"
+            ])
+
+        if "question" in criteria_lower:
+            criteria_met = criteria_met or ("?" in message_lower)
+
+        if "thank" in criteria_lower:
+            criteria_met = criteria_met or any(w in message_lower for w in ["thank", "appreciate", "grateful"])
+
+        if any(t in criteria_lower for t in ["suggest", "advice", "solution", "improvement", "improve"]):
+            criteria_met = criteria_met or any(w in message_lower for w in [
+                "should", "could", "we can", "i suggest", "recommend", "it would be better"
+            ])
+
+        if any(t in criteria_lower for t in ["explain", "describe", "reason"]):
+            criteria_met = criteria_met or any(w in message_lower for w in [
+                "because", "the reason", "for example", "this means", "that is why"
+            ])
+
+        if any(t in criteria_lower for t in ["compare", "comparison"]):
+            criteria_met = criteria_met or any(w in message_lower for w in [
+                "similar", "different", "compared", "unlike", "both", "more", "less"
+            ])
+
+        if any(t in criteria_lower for t in ["predict", "next step", "plan", "goal"]):
+            criteria_met = criteria_met or any(w in message_lower for w in [
+                "will", "might", "may", "next", "plan", "goal", "going to"
+            ])
+
+        # If criteria matched AND enough keywords AND long enough -> advance
+        if criteria_met and keyword_matches >= 2 and word_count >= 15:
             return True
 
-        if "question" in criteria_lower and any(word in message_lower for word in ["?", "what", "how", "when", "where", "why", "could you", "can you"]):
-            return True
-
-        if ("thanks" in criteria_lower or "thank" in criteria_lower) and any(word in message_lower for word in ["thank", "appreciate", "grateful"]):
-            return True
-
-        if ("solution" in criteria_lower or "suggest" in criteria_lower or "advice" in criteria_lower) and any(word in message_lower for word in ["should", "could", "we can", "i can", "try", "suggest", "recommend"]):
-            return True
-
-        if len(student_message.split()) >= 15 and keyword_matches >= 1:
-            return True
-
-        if len(student_message.split()) >= 20:
+        # Fallback: a genuinely long, keyword-rich answer (at least 30 words, 3+ keywords)
+        if word_count >= 30 and keyword_matches >= 3:
             return True
 
         return False

@@ -204,18 +204,25 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         session = load_session(req.session_id)
 
         if not session:
-            print(f"[roleplay/turn] âŒ Session not found: {req.session_id}", flush=True)
+            print(f"[roleplay/turn] FAIL Session not found: {req.session_id}", flush=True)
             raise HTTPException(status_code=404, detail=f"Session not found: {req.session_id}")
 
-        print(f"[roleplay/turn] âœ“ Session loaded (scenario: {session.scenario_id})", flush=True)
+        print(f"[roleplay/turn] OK Session loaded (scenario: {session.scenario_id})", flush=True)
 
         if session.is_completed:
             print(f"[roleplay/turn] Session already completed", flush=True)
+            # Resolve stage name from the scenario for the response
+            from roleplay_scenarios import get_scenario as _get_scenario
+            _sc = _get_scenario(session.scenario_id)
+            _stage_name = "completed"
+            if _sc and _sc.stages:
+                _stage_name = _sc.stages[-1].name
             return TurnResponse(
                 ai_message="This roleplay session has been completed. Great job!",
                 correction=None,
-                current_stage=session.current_stage,
-                is_completed=True
+                current_stage=_stage_name,
+                is_completed=True,
+                feedback="Session already completed.",
             )
 
         # Validate message
@@ -235,9 +242,9 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         try:
             print(f"[roleplay/turn] Calling roleplay engine...", flush=True)
             result = engine.process_turn(session, req.message)
-            print(f"[roleplay/turn] âœ“ Engine returned response", flush=True)
+            print(f"[roleplay/turn] OK Engine returned response", flush=True)
         except Exception as e:
-            print(f"[roleplay/turn] âŒ Engine error: {type(e).__name__}: {e}", flush=True)
+            print(f"[roleplay/turn] FAIL Engine error: {type(e).__name__}: {e}", flush=True)
             raise HTTPException(status_code=500, detail=f"Roleplay engine error: {str(e)}")
 
         # If session just completed, finish the attempt
@@ -262,7 +269,7 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
                         "corrections_count": len(session.corrections_log) if hasattr(session, 'corrections_log') else 0
                     }
                 )
-                print(f"[roleplay] âœ… Attempt {session.attempt_id} finished - Duration: {duration}s, Turns: {len(session.dialogue_history)}", flush=True)
+                print(f"[roleplay] OK Attempt {session.attempt_id} finished - Duration: {duration}s, Turns: {len(session.dialogue_history)}", flush=True)
             except Exception as e:
                 print(f"[roleplay] Warning: Failed to finish attempt: {e}", flush=True)
 
@@ -298,9 +305,9 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         return TurnResponse(
             ai_message=result["ai_message"],
             correction=converted_correction,
-            current_stage=result["current_stage"],  # Changed from stage_info to current_stage
+            current_stage=result["current_stage"],
             is_completed=result["is_completed"],
-            feedback=result.get("feedback")  # Added feedback field
+            feedback=converted_correction.get("feedback"),
         )
 
     except HTTPException:
