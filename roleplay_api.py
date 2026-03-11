@@ -1,4 +1,4 @@
-# roleplay_api.py
+﻿# roleplay_api.py
 """
 FastAPI endpoints for the roleplay feature.
 """
@@ -204,10 +204,10 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         session = load_session(req.session_id)
 
         if not session:
-            print(f"[roleplay/turn] ❌ Session not found: {req.session_id}", flush=True)
+            print(f"[roleplay/turn] âŒ Session not found: {req.session_id}", flush=True)
             raise HTTPException(status_code=404, detail=f"Session not found: {req.session_id}")
 
-        print(f"[roleplay/turn] ✓ Session loaded (scenario: {session.scenario_id})", flush=True)
+        print(f"[roleplay/turn] âœ“ Session loaded (scenario: {session.scenario_id})", flush=True)
 
         if session.is_completed:
             print(f"[roleplay/turn] Session already completed", flush=True)
@@ -235,9 +235,9 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         try:
             print(f"[roleplay/turn] Calling roleplay engine...", flush=True)
             result = engine.process_turn(session, req.message)
-            print(f"[roleplay/turn] ✓ Engine returned response", flush=True)
+            print(f"[roleplay/turn] âœ“ Engine returned response", flush=True)
         except Exception as e:
-            print(f"[roleplay/turn] ❌ Engine error: {type(e).__name__}: {e}", flush=True)
+            print(f"[roleplay/turn] âŒ Engine error: {type(e).__name__}: {e}", flush=True)
             raise HTTPException(status_code=500, detail=f"Roleplay engine error: {str(e)}")
 
         # If session just completed, finish the attempt
@@ -262,7 +262,7 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
                         "corrections_count": len(session.corrections_log) if hasattr(session, 'corrections_log') else 0
                     }
                 )
-                print(f"[roleplay] ✅ Attempt {session.attempt_id} finished - Duration: {duration}s, Turns: {len(session.dialogue_history)}", flush=True)
+                print(f"[roleplay] âœ… Attempt {session.attempt_id} finished - Duration: {duration}s, Turns: {len(session.dialogue_history)}", flush=True)
             except Exception as e:
                 print(f"[roleplay] Warning: Failed to finish attempt: {e}", flush=True)
 
@@ -420,11 +420,14 @@ def _generate_opening_message(scenario, first_stage) -> str:
     """Generate the AI's opening message for the roleplay"""
 
     openings = {
-        "job_interview": "Good morning! Thank you for coming in today. Please, have a seat. I'm looking forward to learning more about you and your experience. Shall we get started?",
-        "client_meeting": "Hello! Thank you for taking the time to meet with me today. I appreciate the opportunity to discuss how we might work together. How has your day been so far?",
-        "customer_complaint": "*phone rings* Hello, thank you for calling Customer Service. My name is Sarah. I understand you're calling about an issue with your order. I'm here to help. Could you tell me what happened?",
-        "team_meeting": "Good morning, everyone. Thanks for making time for this meeting. As you know, we're here to discuss our project timeline. I'd like to start by reviewing where we are and then hear your thoughts. Sound good?",
-        "business_call": "Good morning, this is Tech Supplies, Maria speaking. How may I help you today?"
+        "modern_zoo": "Hi. We have been reading about modern zoos in class. Do you think zoos still have an important role today?",
+        "education_systems": "Hello. I am curious about your education system. Could you tell me how it works and what students usually study?",
+        "university_life": "Hi. I have just started university and everything feels new. What is university life really like for you?",
+        "english_learning_games": "Hello. I want to improve my English outside class. What kinds of games, videos, or other materials actually help?",
+        "festivals_and_traditions": "Hi. I would love to hear about a festival or tradition that is important in your culture. Which one would you choose?",
+        "personal_finance": "Hello. I am trying to manage my monthly budget better. Where should I start if I want to control my spending?",
+        "trade_and_markets": "Hi. We studied supply and demand today, but I still want practice explaining it. Can you describe a simple market change for me?"
     }
 
-    return openings.get(scenario.id, f"Hello! I'm ready to begin this {scenario.title} roleplay with you. Let's get started!")
+    return openings.get(scenario.id, f"Hello. Let's begin the {scenario.title} practice together.")
+

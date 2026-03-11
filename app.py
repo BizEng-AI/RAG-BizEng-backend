@@ -1,5 +1,5 @@
 ﻿"""
-Biz-English API.
+English learning API.
 
 The app uses lazy service initialization so a bad optional dependency (for example,
 a broken Qdrant URL) does not prevent the API process from starting.
@@ -57,8 +57,9 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Biz-English API", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="English Learning API", version="1.1.0", lifespan=lifespan)
 _enc = get_encoding("cl100k_base")
+ENABLE_TOPIC_RETRIEVAL = os.getenv("ENABLE_TOPIC_RETRIEVAL", "").lower() in {"1", "true", "yes", "on"}
 
 
 @app.middleware("http")
@@ -278,7 +279,7 @@ def health_check(db: Session = Depends(get_db)):
     except Exception as exc:
         checks["database"] = f"error: {type(exc).__name__}: {exc}"
     status = "ok" if checks["database"] == "ok" else "degraded"
-    return {"status": status, "service": "bizeng-server", "checks": checks}
+    return {"status": status, "service": "english-studio-server", "checks": checks}
 
 
 @app.get("/ready")
@@ -290,7 +291,7 @@ def readiness_check(db: Session = Depends(get_db)):
         database_status = f"error: {type(exc).__name__}: {exc}"
     vector_store = qdrant_health()
     status = "ok" if database_status == "ok" and vector_store.get("ok") else "degraded"
-    return {"status": status, "service": "bizeng-server", "checks": {"database": database_status, "vector_store": vector_store}}
+    return {"status": status, "service": "english-studio-server", "checks": {"database": database_status, "vector_store": vector_store}}
 
 
 @app.get("/version")
@@ -315,18 +316,18 @@ def debug_embed(payload: EmbReq):
 @app.post("/ask", response_model=AskResp)
 def ask(payload: AskReq) -> AskResp:
     sanitized_query = sanitize_query(payload.query)
-    context, sources = _retrieve_grounding(sanitized_query, payload.k, payload.max_context_chars)
+    context, sources = (_retrieve_grounding(sanitized_query, payload.k, payload.max_context_chars) if ENABLE_TOPIC_RETRIEVAL else ("", []))
     print(f"[ask] query={ascii_safe(sanitized_query)} context_chars={len(context)} sources={len(sources)}", flush=True)
 
     system_prompt = (
-        "You are a professional Business English teaching assistant. "
-        "Use the course materials when they are available. "
-        "If the answer is not in the materials, provide helpful business English guidance."
+        "You are a supportive English learning coach for a university student following a second-semester syllabus. "
+        "Use semester-two materials when they are available. "
+        "If grounded materials are unavailable, still help with grammar, vocabulary, speaking, reading, listening, writing, and topic review in clear natural English."
     )
     if context:
-        user_prompt = f"Student question: {sanitized_query}\n\nCourse materials:\n{context}"
+        user_prompt = f"Student question: {sanitized_query}\n\nSemester-two materials:\n{context}"
     else:
-        user_prompt = f"Student question: {sanitized_query}\n\nNo grounded materials are currently available, so answer helpfully without inventing citations."
+        user_prompt = f"Student question: {sanitized_query}\n\nGrounded semester-two materials are not currently available, so answer helpfully without inventing citations."
 
     try:
         response = get_chat_client().chat.completions.create(
@@ -350,8 +351,8 @@ def ask(payload: AskReq) -> AskResp:
             fallback = get_chat_client().chat.completions.create(
                 model=get_chat_model_name(),
                 messages=[
-                    {"role": "system", "content": "You are a professional Business English teacher. Give concise educational responses."},
-                    {"role": "user", "content": f"Please help me with this Business English question: {sanitized_query}"},
+                    {"role": "system", "content": "You are a concise English tutor. Give short, practical educational responses."},
+                    {"role": "user", "content": f"Please help me with this English-learning question: {sanitized_query}"},
                 ],
                 max_tokens=300,
                 temperature=0.7,
@@ -383,8 +384,8 @@ async def chat(payload: ChatReqDto, user=Depends(get_optional_user), db: Session
             messages.insert(0, {
                 "role": "system",
                 "content": (
-                    "You are a helpful Business English learning assistant. "
-                    "Help students improve professional communication, explain business vocabulary, and provide clear examples."
+                    "You are a helpful English learning assistant for a university learner in a second-semester course. "
+                    "Help with grammar, vocabulary, reading, listening, writing, speaking, and short topic explanations using clear examples."
                 ),
             })
         if len(messages) > 20:
@@ -517,15 +518,15 @@ PHONETIC_TIPS = {
 
 WORD_IPA_DICT = {
     "hello": "həˈləʊ",
-    "meeting": "ˈmiːtɪŋ",
-    "business": "ˈbɪznəs",
-    "client": "ˈklaɪənt",
-    "manager": "ˈmænɪdʒə",
-    "project": "ˈprɒdʒekt",
-    "deadline": "ˈdedlaɪn",
-    "report": "rɪˈpɔːt",
-    "agreement": "əˈɡriːmənt",
-    "professional": "prəˈfeʃənəl",
+    "education": "ˌedʒuˈkeɪʃən",
+    "university": "ˌjuːnɪˈvɜːsəti",
+    "festival": "ˈfestɪvəl",
+    "tradition": "trəˈdɪʃən",
+    "market": "ˈmɑːkɪt",
+    "budget": "ˈbʌdʒɪt",
+    "supply": "səˈplaɪ",
+    "demand": "dɪˈmɑːnd",
+    "economics": "ˌiːkəˈnɒmɪks",
 }
 
 
@@ -783,6 +784,8 @@ async def test_pronunciation_service():
             "Accuracy measurement",
         ],
     }
+
+
 
 
 

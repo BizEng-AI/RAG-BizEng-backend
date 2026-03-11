@@ -24,16 +24,12 @@ class RoleplayReferee:
         stage_objective: str,
         ai_role: str,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Analyze student's message and return ONE priority correction if needed.
-        Returns None if message is good, or a dict with correction details.
-        """
         if len(student_message.strip()) < 3:
             return {
                 "error_type": "pragmatic",
                 "original": student_message,
-                "corrected": "(Please provide a more complete response)",
-                "explanation": "Your response is too short. Try to express your thoughts more fully.",
+                "corrected": "(Please give a fuller answer)",
+                "explanation": "Your answer is too short. Try to express one complete idea.",
                 "priority": "high",
             }
 
@@ -46,25 +42,23 @@ class RoleplayReferee:
         stage_objective: str,
         ai_role: str,
     ) -> Optional[Dict[str, Any]]:
-        """Use an LLM to analyze the response."""
-
-        system_prompt = """You are a strict Business English tutor evaluating student responses in a professional roleplay scenario.
+        system_prompt = """You are a supportive English tutor evaluating a student's reply in a guided speaking practice.
 
 Analyze the student's message for errors in these categories (in priority order):
-1. Pragmatic - offensive language, aggressive tone, off-topic responses, or clearly unprofessional behavior.
-2. Register - language that is too casual for a business setting.
-3. Vocabulary - incorrect or unnatural wording.
+1. Pragmatic - offensive language, totally off-topic replies, or replies that do not answer the task.
+2. Register - language that is too informal, awkward, or unsuitable for the situation.
+3. Vocabulary - incorrect, unnatural, or weak word choice.
 4. Grammar - tense, agreement, article, or sentence-structure mistakes.
 
 Rules:
-- Always flag clearly unprofessional language as a pragmatic error with high priority.
-- Flag only one issue, the most serious one.
-- If the message is professional and appropriate, return NO_ERROR.
+- Flag only one issue, the most useful one to correct first.
+- If the reply is clear and suitable, return NO_ERROR.
+- Keep the correction short, natural, and learner-friendly.
 
 Return this exact format:
 ERROR_TYPE: [grammar|register|vocabulary|pragmatic|NO_ERROR]
 ORIGINAL: [the problematic phrase or word]
-CORRECTED: [how to fix it professionally]
+CORRECTED: [a better version]
 EXPLANATION: [brief explanation in one sentence]
 PRIORITY: [high|medium|low]"""
 
@@ -72,7 +66,7 @@ PRIORITY: [high|medium|low]"""
 AI ROLE: {ai_role}
 STAGE OBJECTIVE: {stage_objective}
 
-STUDENT'S MESSAGE: \"{student_message}\"
+STUDENT MESSAGE: \"{student_message}\"
 
 Analyze this message and provide feedback."""
 
@@ -121,7 +115,6 @@ Analyze this message and provide feedback."""
         advance_criteria: str,
         stage_keywords: List[str],
     ) -> bool:
-        """Check whether the student can advance to the next stage."""
         message_lower = student_message.lower()
 
         if len(student_message.strip()) < 10:
@@ -139,10 +132,7 @@ Analyze this message and provide feedback."""
         if ("thanks" in criteria_lower or "thank" in criteria_lower) and any(word in message_lower for word in ["thank", "appreciate", "grateful"]):
             return True
 
-        if ("solution" in criteria_lower or "offer" in criteria_lower) and any(word in message_lower for word in ["we can", "i can", "would", "offer", "provide", "solution"]):
-            return True
-
-        if "experience" in criteria_lower and any(word in message_lower for word in ["experience", "worked", "role", "position", "responsible", "managed"]):
+        if ("solution" in criteria_lower or "suggest" in criteria_lower or "advice" in criteria_lower) and any(word in message_lower for word in ["should", "could", "we can", "i can", "try", "suggest", "recommend"]):
             return True
 
         if len(student_message.split()) >= 15 and keyword_matches >= 1:
@@ -154,18 +144,16 @@ Analyze this message and provide feedback."""
         return False
 
     def generate_hint(self, stage_hints: List[str], hints_used: int, student_message: str) -> str:
-        """Generate a helpful hint for the student."""
         if hints_used >= len(stage_hints):
-            return "Try to think about what a professional would say in this situation. Focus on being clear and polite."
+            return "Try to answer with one clear idea, one reason, and a short example."
         return stage_hints[hints_used]
 
     def create_mini_drill(self, error_type: str, original: str, corrected: str) -> str:
-        """Create a quick practice exercise based on the error."""
         drills = {
-            "grammar": f"Quick practice: Try rephrasing this sentence correctly: '{original}'",
-            "register": f"Let's practice formality: How would you say this in a more professional way? '{original}'",
-            "vocabulary": f"Vocabulary check: What's a better word or phrase than '{original}' in business English?",
-            "pragmatic": "Think about how you could rephrase that more clearly in a business setting.",
+            "grammar": f"Quick practice: rewrite this correctly: '{original}'",
+            "register": f"Try a more natural version of this sentence: '{original}'",
+            "vocabulary": f"Choose a stronger word or phrase than '{original}'.",
+            "pragmatic": "Try answering the task directly with one complete sentence.",
         }
         return drills.get(error_type, "Try expressing that idea in a different way.")
 

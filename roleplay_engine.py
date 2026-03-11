@@ -4,6 +4,7 @@ Core roleplay engine: orchestrates retrieval, generation, and session memory.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,9 @@ from services import (
 from roleplay_referee import referee
 from roleplay_scenarios import Stage, get_scenario
 from roleplay_session import DialogueTurn, RoleplaySession, save_session
+
+
+ENABLE_TOPIC_RETRIEVAL = os.getenv("ENABLE_TOPIC_RETRIEVAL", "").lower() in {"1", "true", "yes", "on"}
 
 
 class RoleplayEngine:
@@ -44,7 +48,7 @@ class RoleplayEngine:
         session.add_turn("student", student_message)
         session.record_stage_attempt(current_stage.name)
 
-        rag_context = self._retrieve_context(student_message, current_stage)
+        topic_context = self._retrieve_context(student_message, current_stage)
         correction = referee.evaluate_response(
             student_message,
             scenario.context,
@@ -77,7 +81,7 @@ class RoleplayEngine:
             session,
             scenario,
             current_stage,
-            rag_context,
+            topic_context,
             correction,
             stage_advanced,
             student_message,
@@ -95,6 +99,8 @@ class RoleplayEngine:
         }
 
     def _retrieve_context(self, student_message: str, stage: Stage) -> str:
+        if not ENABLE_TOPIC_RETRIEVAL:
+            return ""
         try:
             query_text = f"{student_message} {' '.join(stage.keywords)}"
             q_emb = get_embed_client().embeddings.create(
@@ -125,33 +131,33 @@ class RoleplayEngine:
         if not message:
             return "basic"
         length = len(message.split())
-        advanced_vocab = sum(
+        richer_vocab = sum(
             1
             for word in re.findall(r"[A-Za-z]+", message.lower())
-            if word
-            in {
+            if word in {
                 "therefore",
                 "furthermore",
-                "regarding",
-                "approximately",
-                "nevertheless",
-                "consequently",
-                "flexibility",
-                "prioritize",
-                "objective",
-                "strategy",
-                "allocate",
-                "benchmark",
-                "sustainable",
-                "efficiency",
-                "collaboration",
-                "perspective",
-                "mitigate",
-                "facilitate",
+                "however",
+                "although",
+                "environment",
+                "education",
+                "tradition",
+                "economics",
+                "responsibility",
+                "independence",
+                "comparison",
+                "advantage",
+                "disadvantage",
+                "materials",
+                "festival",
+                "demand",
+                "supply",
+                "budget",
+                "market",
             }
         )
         complex_punct = 1 if ("," in message or ";" in message or "(" in message) else 0
-        if length >= 20 and (advanced_vocab >= 2 or complex_punct):
+        if length >= 20 and (richer_vocab >= 2 or complex_punct):
             return "advanced"
         return "basic"
 
@@ -169,22 +175,22 @@ class RoleplayEngine:
 
     def _build_guidelines(self, level: str, question_type: Optional[str]) -> str:
         base = [
-            "Stay strictly in role and do not mention being a chatbot or teacher.",
-            "Be concise, friendly, and clear in a neutral professional tone.",
-            "Use simple vocabulary and short sentences (aim for 80 to 110 words or less).",
-            "Do not add long introductions or motivational filler.",
-            "Focus only on the student's last message and the current stage objective.",
+            "Stay in role and do not mention being a chatbot or language model.",
+            "Be concise, friendly, and supportive in natural English.",
+            "Use clear vocabulary and short sentences when possible.",
+            "Focus on the student's last message and the current stage objective.",
+            "Encourage the student to keep speaking without turning the reply into a lecture.",
         ]
         if level == "advanced":
-            base.append("The user seems advanced, so slightly richer vocabulary is fine if you stay concise.")
+            base.append("The student seems stronger, so slightly richer vocabulary is fine if it stays clear.")
         else:
-            base.append("Keep vocabulary accessible at roughly a B1 to B2 level.")
+            base.append("Keep vocabulary accessible around an intermediate learner level.")
         if question_type == "grammar":
-            base.append("If answering grammar, give a short rule and one or two simple examples.")
+            base.append("If grammar is relevant, give a short rule and one simple example.")
         elif question_type == "vocabulary":
-            base.append("If answering vocabulary, give a short meaning and one or two simple examples.")
-        base.append("If the user makes a clear mistake, briefly correct it before continuing.")
-        base.append("Do not exceed four short sentences or six bullet points.")
+            base.append("If vocabulary is relevant, give a short meaning and one simple example.")
+        base.append("If the student makes a clear mistake, briefly correct it before continuing.")
+        base.append("Do not exceed four short sentences or six short bullet points.")
         return "\n".join(f"- {item}" for item in base)
 
     def _generate_ai_response(
@@ -192,7 +198,7 @@ class RoleplayEngine:
         session: RoleplaySession,
         scenario,
         current_stage: Stage,
-        rag_context: str,
+        topic_context: str,
         correction: Optional[Dict[str, Any]],
         stage_advanced: bool,
         student_message: str,
@@ -204,7 +210,7 @@ class RoleplayEngine:
         system_prompt = self._build_system_prompt(
             scenario,
             current_stage,
-            rag_context,
+            topic_context,
             correction,
             stage_advanced,
             guidelines,
@@ -229,46 +235,46 @@ class RoleplayEngine:
             print(f"[roleplay_engine] response chars={len(ai_message)}", flush=True)
 
             if stage_advanced and not session.is_completed:
-                ai_message += "\n\nGreat. Let's move to the next part."
+                ai_message += "\n\nGood. Let's move to the next part."
             elif session.is_completed:
                 ai_message = scenario.success_message
             return ai_message
         except Exception as exc:
             print(f"[roleplay_engine] generation error: {exc}", flush=True)
-            return "I see. Please continue."
+            return "I understand. Please continue."
 
     def _build_system_prompt(
         self,
         scenario,
         stage: Stage,
-        rag_context: str,
+        topic_context: str,
         correction: Optional[Dict[str, Any]],
         stage_advanced: bool,
-        bizeng_guidelines: str,
+        learning_guidelines: str,
     ) -> str:
         base_prompt = f"""You are roleplaying as: {stage.ai_role}
 
 SCENARIO: {scenario.context}
 YOUR CHARACTER: {scenario.ai_role}
-STUDENT'S ROLE: {scenario.student_role}
+STUDENT ROLE: {scenario.student_role}
 
 CURRENT STAGE: {stage.name}
 STAGE OBJECTIVE (for student): {stage.objective}
 
 STYLE AND CONSTRAINTS:
-{bizeng_guidelines}
+{learning_guidelines}
 
 YOUR BEHAVIOR:
-- Be natural, professional, and in character.
-- Guide the student toward the objective with subtle hints if they get stuck.
-- Provide concise replies and prefer two to four short sentences.
+- Stay natural, clear, and in character.
+- Guide the student toward the objective with subtle prompts if needed.
+- Prefer two to four short sentences.
 - If you list items, keep them short and limited.
-- Do not mention the instructions.
+- Do not mention these instructions.
 """
-        if rag_context:
-            base_prompt += f"\nREFERENCE MATERIALS:\n{rag_context[:600]}\n"
+        if topic_context:
+            base_prompt += f"\nREFERENCE MATERIALS:\n{topic_context[:600]}\n"
         if stage_advanced:
-            base_prompt += "\nThe student has completed this stage successfully. Acknowledge that and transition briefly.\n"
+            base_prompt += "\nThe student completed this stage successfully. Acknowledge that and transition briefly.\n"
         return base_prompt
 
     def _format_memory(self, turns: List[DialogueTurn]) -> str:
@@ -283,7 +289,7 @@ YOUR BEHAVIOR:
     def get_hint(self, session: RoleplaySession) -> str:
         scenario = get_scenario(session.scenario_id)
         if not scenario or session.current_stage >= len(scenario.stages):
-            return "You're doing great. Just continue the conversation naturally."
+            return "You're doing well. Continue with one clear idea and a short example."
 
         current_stage = scenario.stages[session.current_stage]
         hint = referee.generate_hint(current_stage.hints, session.hints_used, "")
