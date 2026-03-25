@@ -174,10 +174,10 @@ Analyze this message and provide feedback. Remember: flag ANY unprofessional lan
         if "question" in criteria_lower and any(word in message_lower for word in ["?", "what", "how", "when", "where", "why", "could you", "can you"]):
             return True
 
-        if "thanks" in criteria_lower or "thank" in criteria_lower and any(word in message_lower for word in ["thank", "appreciate", "grateful"]):
+        if ("thanks" in criteria_lower or "thank" in criteria_lower) and any(word in message_lower for word in ["thank", "appreciate", "grateful"]):
             return True
 
-        if "solution" in criteria_lower or "offer" in criteria_lower and any(word in message_lower for word in ["we can", "i can", "would", "offer", "provide", "solution"]):
+        if ("solution" in criteria_lower or "offer" in criteria_lower) and any(word in message_lower for word in ["we can", "i can", "would", "offer", "provide", "solution"]):
             return True
 
         if "experience" in criteria_lower and any(word in message_lower for word in ["experience", "worked", "role", "position", "responsible", "managed"]):

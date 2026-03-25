@@ -9,7 +9,6 @@ from tiktoken import get_encoding
 from settings import *
 import sys
 import re
-import uuid  # <-- Added missing import
 
 print("[ingest] starting…", flush=True)
 print("[ingest] cwd:", Path.cwd(), flush=True)
@@ -151,5 +150,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "delete":
         delete_book_vectors(sys.argv[2])
     else:
-        # 👉 point to your real file
-        upsert_book("C:/Users/sanja/rag-biz-english/data/book_1_ocr.txt", source_id="book_1_ocr")
+        if len(sys.argv) > 1:
+            upsert_book(sys.argv[1], source_id=Path(sys.argv[1]).stem)
+        else:
+            print("[ingest][ERROR] Usage: python ingest.py <path-to-text-file>", flush=True)
+            sys.exit(1)

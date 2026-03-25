@@ -170,7 +170,7 @@ def submit_turn(req: TurnRequest):
             return TurnResponse(
                 ai_message="This roleplay session has been completed. Great job!",
                 correction=None,
-                current_stage=session.current_stage,  # Changed from stage_info to current_stage
+                current_stage="completed",
                 is_completed=True
             )
 

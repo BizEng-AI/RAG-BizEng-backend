@@ -241,8 +241,12 @@ def create_session(scenario_id: str, student_name: Optional[str] = None) -> Role
 def save_session(session: RoleplaySession):
     """Save session to disk"""
     filepath = SESSIONS_DIR / f"{session.session_id}.json"
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(session.to_dict(), f, indent=2, ensure_ascii=False)
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(session.to_dict(), f, indent=2, ensure_ascii=False)
+    except (OSError, IOError) as e:
+        print(f"[session] Failed to save session {session.session_id}: {e}", flush=True)
+        raise
 
 
 def load_session(session_id: str) -> Optional[RoleplaySession]:
@@ -251,10 +255,13 @@ def load_session(session_id: str) -> Optional[RoleplaySession]:
     if not filepath.exists():
         return None
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    return RoleplaySession.from_dict(data)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return RoleplaySession.from_dict(data)
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"[session] Corrupted session file {session_id}: {e}", flush=True)
+        return None
 
 
 def delete_session(session_id: str):
@@ -268,8 +275,12 @@ def list_user_sessions(student_name: Optional[str] = None, active_only: bool = F
     """List all sessions, optionally filtered"""
     sessions = []
     for filepath in SESSIONS_DIR.glob("*.json"):
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[session] Skipping corrupted file {filepath.name}: {e}", flush=True)
+            continue
 
         # Apply filters
         if student_name and data.get("student_name") != student_name:

@@ -17,6 +17,7 @@ from typing import Any, List, Optional
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, validator
 
@@ -76,16 +77,22 @@ def ascii_safe(s: str) -> str:
         return "<non-ascii>"
 
 
-import os, sys
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1"
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
 if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 # --- app init ---
 app = FastAPI(title="Biz-English RAG API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 print("[startup] app.py reloaded OK", flush=True)
 
 # Import and include roleplay router
@@ -205,7 +212,7 @@ class EmbReq(BaseModel):
 
 @app.get("/version")
 def version():
-    return {"version": "0.1.0", "env": "dev", "debug": True}
+    return {"version": "0.1.0", "env": os.getenv("ENVIRONMENT", "development")}
 
 @app.post("/debug/embed")
 def debug_embed(e: EmbReq):
@@ -529,11 +536,15 @@ async def speech_to_text(file: UploadFile = File(...)):
     """
     print(f"[stt] Received file: {file.filename}, content_type: {file.content_type}", flush=True)
 
+    MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB (Whisper API limit)
+
     # Create temporary file to store uploaded audio
     temp_path = None
     try:
         # Read uploaded file content
         content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024*1024)}MB")
         print(f"[stt] File size: {len(content)} bytes", flush=True)
 
         # Determine file extension from filename or content type
