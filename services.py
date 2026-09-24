@@ -40,6 +40,21 @@ def _masked(value: Optional[str], keep: int = 12) -> str:
     return value[:keep] + "..."
 
 
+def _describe_qdrant_error(exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if "404" in lowered and "page not found" in lowered:
+        return (
+            "QDRANT_URL does not appear to point to a live Qdrant API endpoint. "
+            "The configured host is returning a plain 404 page instead of Qdrant REST responses."
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
+def describe_qdrant_error(exc: Exception) -> str:
+    return _describe_qdrant_error(exc)
+
+
 @lru_cache(maxsize=1)
 def get_chat_client() -> OpenAI | AzureOpenAI:
     if USE_AZURE:
@@ -172,5 +187,5 @@ def qdrant_health() -> dict[str, Any]:
             )
         return status
     except Exception as exc:  # pragma: no cover - exercised via higher-level tests
-        status.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        status.update({"ok": False, "error": _describe_qdrant_error(exc)})
         return status

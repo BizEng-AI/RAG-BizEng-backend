@@ -1,4 +1,4 @@
-﻿"""
+"""
 English learning API.
 
 The app uses lazy service initialization so a bad optional dependency (for example,
@@ -19,47 +19,80 @@ from typing import Any, List, Optional
 
 import azure.cognitiveservices.speech as speechsdk
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from openai import AuthenticationError, BadRequestError, NotFoundError, PermissionDeniedError, RateLimitError
 from pydantic import BaseModel, field_validator
 from qdrant_client.models import SearchParams
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from tiktoken import get_encoding
 
 from bootstrap import init_db
 from db import get_db
-from deps import get_optional_user
+from deps import get_optional_user, require_admin, require_student
 from roleplay_api import router as roleplay_router
-from routers import admin, admin_monitor, auth, me, tracking
+from routers import admin, admin_monitor, auth, legal, me, tracking
 from routers.tracking import create_attempt_internal, finish_attempt_internal
+from retrieval import (
+    is_material_related_query,
+    local_retrieval_health,
+    retrieve_grounding,
+)
 from services import (
-    expected_embedding_dim,
     get_audio_client,
     get_chat_client,
     get_chat_model_name,
     get_embed_client,
     get_embed_model_name,
     get_qdrant_client,
-    get_qdrant_collection_info,
     get_speech_config,
     qdrant_health,
 )
-from settings import AZURE_SPEECH_REGION, QDRANT_COLLECTION
+from settings import (
+    AI_OPENAI_AUDIO_ENDPOINTS_ENABLED,
+    AZURE_SPEECH_REGION,
+    QDRANT_COLLECTION,
+    is_production_environment,
+    validate_runtime_settings,
+)
 from tracking import track
+from usage_limits import consume_ai_units, get_user_daily_usage_summary
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     started = time.perf_counter()
+    validate_runtime_settings()
     print("[startup] initializing database", flush=True)
     init_db()
     print(f"[startup] database ready in {(time.perf_counter() - started) * 1000:.1f}ms", flush=True)
     yield
 
 
-app = FastAPI(title="English Learning API", version="1.1.0", lifespan=lifespan)
-_enc = get_encoding("cl100k_base")
-ENABLE_TOPIC_RETRIEVAL = os.getenv("ENABLE_TOPIC_RETRIEVAL", "").lower() in {"1", "true", "yes", "on"}
+app = FastAPI(
+    title="English Learning API",
+    version="1.2.0",
+    lifespan=lifespan,
+    docs_url=None if is_production_environment() else "/docs",
+    redoc_url=None if is_production_environment() else "/redoc",
+    openapi_url=None if is_production_environment() else "/openapi.json",
+)
+ENABLE_TOPIC_RETRIEVAL = os.getenv("ENABLE_TOPIC_RETRIEVAL", "true").lower() in {"1", "true", "yes", "on"}
+WEB_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "WEB_CORS_ORIGINS",
+        "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:4173,http://localhost:4173",
+    ).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=WEB_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -88,11 +121,24 @@ async def request_timing_middleware(request: Request, call_next):
 
 
 app.include_router(auth.router)
+app.include_router(legal.router)
 app.include_router(me.router)
 app.include_router(admin.router)
 app.include_router(tracking.router)
 app.include_router(admin_monitor.router)
 app.include_router(roleplay_router)
+
+MAX_AUDIO_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_AUDIO_SUFFIXES = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".mp4",
+    ".mpeg",
+    ".mpga",
+    ".ogg",
+    ".webm",
+}
 
 
 class AskReq(BaseModel):
@@ -129,6 +175,7 @@ class ChatReqDto(BaseModel):
     k: int = 5
     maxContextChars: int = 6000
     unit: Optional[str] = None
+    use_rag: bool = True
 
 
 class ChatRespDto(BaseModel):
@@ -142,6 +189,58 @@ class PeekResp(BaseModel):
 
 class STTResponse(BaseModel):
     text: str
+
+
+@app.get("/usage/me")
+def my_usage_summary(user=Depends(require_student), db: Session = Depends(get_db)):
+    return get_user_daily_usage_summary(db, user_id=user.id)
+
+
+def _validate_audio_upload(file: UploadFile, content: bytes) -> str:
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
+
+    if len(content) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file exceeds the {MAX_AUDIO_UPLOAD_BYTES // (1024 * 1024)}MB upload limit",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if content_type and not (
+        content_type.startswith("audio/") or content_type in {"application/octet-stream", "application/ogg"}
+    ):
+        raise HTTPException(status_code=415, detail=f"Unsupported content type '{content_type}'")
+
+    suffix = (Path(file.filename or "audio.wav").suffix or ".wav").lower()
+    if suffix not in ALLOWED_AUDIO_SUFFIXES:
+        allowed = ", ".join(sorted(ALLOWED_AUDIO_SUFFIXES))
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported audio format '{suffix}'. Allowed formats: {allowed}",
+        )
+
+    return suffix
+
+
+def _estimate_audio_seconds(file: UploadFile, content: bytes) -> float:
+    suffix = (Path(file.filename or "").suffix or "").lower()
+    content_type = (file.content_type or "").lower()
+    if (suffix == ".wav" or content_type in {"audio/wav", "audio/x-wav"}) and len(content) >= 44:
+        try:
+            channels = int.from_bytes(content[22:24], "little")
+            sample_rate = int.from_bytes(content[24:28], "little")
+            bits_per_sample = int.from_bytes(content[34:36], "little")
+            data_index = content.find(b"data")
+            if channels > 0 and sample_rate > 0 and bits_per_sample > 0 and data_index != -1 and data_index + 8 <= len(content):
+                data_size = int.from_bytes(content[data_index + 4:data_index + 8], "little")
+                bytes_per_second = sample_rate * channels * (bits_per_sample / 8)
+                if bytes_per_second > 0:
+                    return max(0.1, data_size / bytes_per_second)
+        except Exception:
+            pass
+    # Conservative fallback for compressed browser audio: charge at least a short practice turn.
+    return 15.0
 
 
 
@@ -178,77 +277,22 @@ def sanitize_query(query: str) -> str:
 
 
 
-def pack_context(hits: list[Any], token_budget: int = 1200) -> str:
-    chunks: list[str] = []
-    used = 0
-    for hit in hits:
-        text_value = (hit.payload.get("text") or "").strip()
-        if not text_value:
-            continue
-        token_count = len(_enc.encode(text_value))
-        if used + token_count > token_budget:
-            continue
-        chunks.append(text_value)
-        used += token_count
-    return "\n\n---\n\n".join(chunks)
+def _is_query_retrieval_relevant(query: str) -> bool:
+    return is_material_related_query(query)
 
 
-
-def bm25ish_score(text_value: str, query: str) -> int:
-    query_words = re.findall(r"\w+", (query or "").lower())
-    text_words = set(re.findall(r"\w+", (text_value or "").lower()))
-    return sum(1 for word in query_words if word in text_words)
-
-
-
-def _vector_collection_size() -> int:
-    info = get_qdrant_collection_info()
-    vectors = info.config.params.vectors
-    if hasattr(vectors, "size"):
-        return int(vectors.size)
-    if isinstance(vectors, dict) and vectors:
-        return int(next(iter(vectors.values())).size)
-    raise RuntimeError("Unable to determine Qdrant vector size")
+def _count_words(text: str) -> int:
+    return len([part for part in (text or "").strip().split() if part])
 
 
 
 def _retrieve_grounding(query: str, k: int, max_context_chars: int) -> tuple[str, list[str]]:
-    try:
-        vector_size = _vector_collection_size()
-        expected_size = expected_embedding_dim()
-        if vector_size != expected_size:
-            raise RuntimeError(
-                f"Embedding model dimension {expected_size} does not match collection dimension {vector_size}"
-            )
-
-        q_emb = get_embed_client().embeddings.create(
-            model=get_embed_model_name(),
-            input=query,
-        ).data[0].embedding
-
-        raw_hits = get_qdrant_client().search(
-            collection_name=QDRANT_COLLECTION,
-            query_vector=q_emb,
-            limit=max(k, 50),
-            with_payload=True,
-            search_params=SearchParams(hnsw_ef=128, exact=False),
-        )
-        if not raw_hits:
-            return "", []
-
-        raw_hits.sort(
-            key=lambda hit: (hit.score or 0.0) + 0.001 * bm25ish_score((hit.payload or {}).get("text", ""), query),
-            reverse=True,
-        )
-        hits = raw_hits[:k]
-        context = pack_context(hits, token_budget=1200)
-        if len(context) > max_context_chars:
-            context = context[:max_context_chars]
-        sources = [str((hit.payload or {}).get("source_id") or "") for hit in hits if (hit.payload or {}).get("source_id")]
-        return context, sources
-    except Exception as exc:
-        print(f"[ask] retrieval unavailable: {type(exc).__name__}: {exc}", flush=True)
-        return "", []
+    result = retrieve_grounding(query=query, k=k, max_context_chars=max_context_chars)
+    if result.degraded_reason:
+        print(f"[ask] retrieval degraded backend={result.backend} reason={result.degraded_reason}", flush=True)
+    else:
+        print(f"[ask] retrieval backend={result.backend}", flush=True)
+    return result.context, result.sources
 
 
 
@@ -279,7 +323,7 @@ def health_check(db: Session = Depends(get_db)):
     except Exception as exc:
         checks["database"] = f"error: {type(exc).__name__}: {exc}"
     status = "ok" if checks["database"] == "ok" else "degraded"
-    return {"status": status, "service": "english-studio-server", "checks": checks}
+    return {"status": status, "service": "bizeng-chatbot-server", "checks": checks}
 
 
 @app.get("/ready")
@@ -290,8 +334,20 @@ def readiness_check(db: Session = Depends(get_db)):
     except Exception as exc:
         database_status = f"error: {type(exc).__name__}: {exc}"
     vector_store = qdrant_health()
-    status = "ok" if database_status == "ok" and vector_store.get("ok") else "degraded"
-    return {"status": status, "service": "english-studio-server", "checks": {"database": database_status, "vector_store": vector_store}}
+    local_store = local_retrieval_health()
+    retrieval_ok = bool(vector_store.get("ok") or local_store.get("ok"))
+    status = "ok" if database_status == "ok" and retrieval_ok else "degraded"
+    preferred_backend = "qdrant" if vector_store.get("ok") else ("local_lexical" if local_store.get("ok") else "none")
+    return {
+        "status": status,
+        "service": "bizeng-chatbot-server",
+        "checks": {
+            "database": database_status,
+            "vector_store": vector_store,
+            "local_store": local_store,
+            "preferred_retrieval_backend": preferred_backend,
+        },
+    }
 
 
 @app.get("/version")
@@ -304,7 +360,7 @@ def version():
 
 
 @app.post("/debug/embed")
-def debug_embed(payload: EmbReq):
+def debug_embed(payload: EmbReq, _user=Depends(require_admin)):
     try:
         vector = get_embed_client().embeddings.create(model=get_embed_model_name(), input=payload.text).data[0].embedding
         return {"dim": len(vector)}
@@ -314,20 +370,29 @@ def debug_embed(payload: EmbReq):
 
 
 @app.post("/ask", response_model=AskResp)
-def ask(payload: AskReq) -> AskResp:
+def ask(payload: AskReq, user=Depends(require_student), db: Session = Depends(get_db)) -> AskResp:
     sanitized_query = sanitize_query(payload.query)
     context, sources = (_retrieve_grounding(sanitized_query, payload.k, payload.max_context_chars) if ENABLE_TOPIC_RETRIEVAL else ("", []))
-    print(f"[ask] query={ascii_safe(sanitized_query)} context_chars={len(context)} sources={len(sources)}", flush=True)
+    print(f"[ask] query_length={len(sanitized_query)} context_chars={len(context)} sources={len(sources)}", flush=True)
+    consume_ai_units(
+        db,
+        user_id=user.id,
+        route="ask",
+        extra_metadata={"query_length": len(sanitized_query), "sources": len(sources)},
+    )
 
     system_prompt = (
-        "You are a supportive English learning coach for a university student following a second-semester syllabus. "
-        "Use semester-two materials when they are available. "
-        "If grounded materials are unavailable, still help with grammar, vocabulary, speaking, reading, listening, writing, and topic review in clear natural English."
+        "You are a friendly English coach for A2-B1 learners. B2 is the highest level allowed. "
+        "Use short sentences and common words first. Avoid idioms, slang, long academic words, and formal business jargon. "
+        "If a hard business word is useful, explain it in simple English. "
+        "Use grounded course materials when they are available. "
+        "If grounded materials are unavailable, still help with grammar, vocabulary, speaking, reading, listening, writing, and topic review in clear English. "
+        "Keep answers short. Use 2-4 bullets when a list helps."
     )
     if context:
-        user_prompt = f"Student question: {sanitized_query}\n\nSemester-two materials:\n{context}"
+        user_prompt = f"Student question: {sanitized_query}\n\nReference materials:\n{context}"
     else:
-        user_prompt = f"Student question: {sanitized_query}\n\nGrounded semester-two materials are not currently available, so answer helpfully without inventing citations."
+        user_prompt = f"Student question: {sanitized_query}\n\nGrounded reference materials are not currently available, so answer helpfully without inventing citations."
 
     try:
         response = get_chat_client().chat.completions.create(
@@ -366,33 +431,64 @@ def ask(payload: AskReq) -> AskResp:
 
 
 @app.post("/chat", response_model=ChatRespDto)
-async def chat(payload: ChatReqDto, user=Depends(get_optional_user), db: Session = Depends(get_db)) -> ChatRespDto:
+async def chat(payload: ChatReqDto, user=Depends(require_student), db: Session = Depends(get_db)) -> ChatRespDto:
     started = time.perf_counter()
     attempt = None
     try:
-        if user:
-            attempt = create_attempt_internal(
-                db=db,
-                user_id=user.id,
-                exercise_type="chat",
-                exercise_id=f"chat_{int(time.time())}",
-                extra_metadata={"message_count": len(payload.messages)},
-            )
+        consume_ai_units(
+            db,
+            user_id=user.id,
+            route="chat",
+            extra_metadata={"message_count": len(payload.messages)},
+        )
+        attempt = create_attempt_internal(
+            db=db,
+            user_id=user.id,
+            exercise_type="chat",
+            exercise_id=f"chat_{int(time.time())}",
+            extra_metadata={"message_count": len(payload.messages)},
+        )
 
         messages = [{"role": item.role, "content": item.content} for item in payload.messages]
         if not messages or messages[0].get("role") != "system":
             messages.insert(0, {
                 "role": "system",
                 "content": (
-                    "You are a helpful English learning assistant for a university learner in a second-semester course. "
-                    "Help with grammar, vocabulary, reading, listening, writing, speaking, and short topic explanations using clear examples."
+                    "You are a friendly English coach for A2-B1 learners. B2 is the highest level allowed. "
+                    "Use short sentences and common words first. Avoid idioms, slang, long academic words, and formal business jargon. "
+                    "If a hard business word is useful, explain it in simple English. "
+                    "Help with grammar, vocabulary, reading, listening, writing, speaking, and short topic explanations using clear examples. "
+                    "Keep the focus on work, study, travel, trade, meetings, email, and daily tasks when relevant."
                 ),
             })
+
+        latest_user_message = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                latest_user_message = (msg.get("content") or "").strip()
+                break
+
+        sources: list[str] = []
+        if ENABLE_TOPIC_RETRIEVAL and payload.use_rag and _is_query_retrieval_relevant(latest_user_message):
+            context, sources = _retrieve_grounding(
+                query=sanitize_query(latest_user_message),
+                k=payload.k,
+                max_context_chars=payload.maxContextChars,
+            )
+            if context:
+                messages.insert(1, {
+                    "role": "system",
+                    "content": (
+                        "Use these reference materials when relevant. "
+                        "If the prompt is general, answer naturally without forced citations.\n\n"
+                        f"{context}"
+                    ),
+                })
+
         if len(messages) > 20:
             messages = [messages[0]] + messages[-19:]
 
-        if user:
-            track(user.id, "chat_opened", feature="chat", message_count=len(messages))
+        track(user.id, "chat_opened", feature="chat", message_count=len(messages))
 
         response = get_chat_client().chat.completions.create(
             model=get_chat_model_name(),
@@ -406,23 +502,34 @@ async def chat(payload: ChatReqDto, user=Depends(get_optional_user), db: Session
             raise ValueError("Empty response from model")
 
         if attempt:
+            user_messages = [msg for msg in messages if msg.get("role") == "user"]
+            latest_user_words = _count_words(latest_user_message)
             finish_attempt_internal(
                 db=db,
                 attempt_id=attempt.id,
-                duration_seconds=int(time.perf_counter() - started),
+                duration_seconds=max(1, int(time.perf_counter() - started)),
                 score=None,
-                extra_metadata={"response_length": len(answer), "total_messages": len(messages)},
+                extra_metadata={
+                    "response_length": len(answer),
+                    "total_messages": len(messages),
+                    "message_count": len(user_messages),
+                    "word_count": latest_user_words,
+                    "user_message_words": latest_user_words,
+                    "input_char_count": len(latest_user_message),
+                    "assistant_words": _count_words(answer),
+                },
             )
-        if user:
-            track(user.id, "chat_message", feature="chat", message_length=len(answer))
-        return ChatRespDto(answer=answer, sources=[])
+        track(user.id, "chat_message", feature="chat", message_length=len(answer))
+        return ChatRespDto(answer=answer, sources=sources)
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise _openai_error_hint(exc, "/chat")
 
 
 @app.get("/debug/search", response_model=PeekResp)
-def debug_search(q: str, k: int = 5):
+def debug_search(q: str, k: int = 5, _user=Depends(require_admin)):
     try:
         vector = get_embed_client().embeddings.create(model=get_embed_model_name(), input=q).data[0].embedding
         hits = get_qdrant_client().search(
@@ -447,18 +554,32 @@ def debug_search(q: str, k: int = 5):
 
 
 @app.post("/stt", response_model=STTResponse)
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(
+    file: UploadFile = File(...),
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
     temp_path = None
     try:
         content = await file.read()
-        suffix = Path(file.filename).suffix if file.filename else ".wav"
-        suffix = suffix or ".wav"
+        suffix = _validate_audio_upload(file, content)
+        if not AI_OPENAI_AUDIO_ENDPOINTS_ENABLED:
+            raise HTTPException(status_code=403, detail="Speech-to-text is disabled to control AI spending.")
+        audio_seconds = _estimate_audio_seconds(file, content)
+        consume_ai_units(
+            db,
+            user_id=user.id,
+            route="stt",
+            extra_metadata={"bytes": len(content), "content_type": file.content_type, "audio_seconds": audio_seconds},
+        )
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(content)
             temp_path = temp_file.name
         with open(temp_path, "rb") as audio_file:
             transcript = get_audio_client().audio.transcriptions.create(model="whisper-1", file=audio_file, language="en")
         return STTResponse(text=transcript.text)
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise _openai_error_hint(exc, "/stt")
@@ -471,8 +592,21 @@ async def speech_to_text(file: UploadFile = File(...)):
 
 
 @app.post("/tts")
-async def text_to_speech(text: str = Form(...)):
+async def text_to_speech(
+    text: str = Form(...),
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    if not AI_OPENAI_AUDIO_ENDPOINTS_ENABLED:
+        raise HTTPException(status_code=403, detail="Text-to-speech is disabled to control AI spending.")
+
     try:
+        consume_ai_units(
+            db,
+            user_id=user.id,
+            route="tts",
+            extra_metadata={"text_length": len(text)},
+        )
         response = get_audio_client().audio.speech.create(model="tts-1", voice="alloy", input=text, response_format="mp3")
         return Response(content=response.content, media_type="audio/mpeg", headers={"Content-Disposition": "attachment; filename=speech.mp3"})
     except Exception as exc:
@@ -532,9 +666,74 @@ WORD_IPA_DICT = {
 
 
 def get_word_ipa(word: str, phonemes: Optional[List[PronunciationPhoneme]] = None) -> str:
+    clean_word = re.sub(r"[^a-z']", "", (word or "").lower())
+    if not clean_word:
+        return ""
+
     if phonemes:
-        return "".join(item.phoneme for item in phonemes)
-    return WORD_IPA_DICT.get(word.lower().strip(".,!?;:"), "")
+        phoneme_joined = "".join(item.phoneme for item in phonemes if item.phoneme)
+        if phoneme_joined.strip():
+            return phoneme_joined
+
+    dictionary_ipa = WORD_IPA_DICT.get(clean_word)
+    if dictionary_ipa:
+        return dictionary_ipa
+
+    transformed = clean_word
+    for source, target in [
+        ("tion", "ʃən"),
+        ("sion", "ʒən"),
+        ("ough", "oʊ"),
+        ("eigh", "eɪ"),
+        ("igh", "aɪ"),
+        ("ph", "f"),
+        ("th", "θ"),
+        ("ch", "tʃ"),
+        ("sh", "ʃ"),
+        ("ng", "ŋ"),
+        ("ee", "iː"),
+        ("oo", "uː"),
+        ("ea", "iː"),
+        ("ou", "aʊ"),
+        ("ow", "aʊ"),
+        ("ai", "eɪ"),
+        ("ay", "eɪ"),
+        ("oa", "oʊ"),
+        ("qu", "kw"),
+        ("x", "ks"),
+    ]:
+        transformed = transformed.replace(source, target)
+
+    single_map = {
+        "a": "æ",
+        "b": "b",
+        "c": "k",
+        "d": "d",
+        "e": "e",
+        "f": "f",
+        "g": "g",
+        "h": "h",
+        "i": "ɪ",
+        "j": "dʒ",
+        "k": "k",
+        "l": "l",
+        "m": "m",
+        "n": "n",
+        "o": "ɒ",
+        "p": "p",
+        "q": "k",
+        "r": "r",
+        "s": "s",
+        "t": "t",
+        "u": "ʌ",
+        "v": "v",
+        "w": "w",
+        "y": "j",
+        "z": "z",
+        "'": "",
+    }
+
+    return "".join(single_map.get(char, char) for char in transformed)
 
 
 
@@ -646,23 +845,42 @@ async def _run_pronunciation_assessment(
                 extra_metadata={"reference_text": reference_text[:100]},
             )
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-            temp_audio.write(await audio.read())
+        audio_content = await audio.read()
+        audio_suffix = _validate_audio_upload(audio, audio_content)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=audio_suffix) as temp_audio:
+            temp_audio.write(audio_content)
             temp_audio_path = temp_audio.name
 
-        audio_config = speechsdk.AudioConfig(filename=temp_audio_path)
-        assessment_config = speechsdk.PronunciationAssessmentConfig(
-            reference_text=reference_text,
-            grading_system=speechsdk.PronunciationAssessmentGradingSystem.HundredMark,
-            granularity=speechsdk.PronunciationAssessmentGranularity.Word,
-            enable_miscue=True,
-        )
-        recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-        assessment_config.apply_to(recognizer)
-        result = recognizer.recognize_once()
+        try:
+            audio_config = speechsdk.AudioConfig(filename=temp_audio_path)
+            assessment_config = speechsdk.PronunciationAssessmentConfig(
+                reference_text=reference_text,
+                grading_system=speechsdk.PronunciationAssessmentGradingSystem.HundredMark,
+                granularity=speechsdk.PronunciationAssessmentGranularity.Word,
+                enable_miscue=True,
+            )
+            recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+            assessment_config.apply_to(recognizer)
+            result = recognizer.recognize_once()
+        except RuntimeError as exc:
+            message = str(exc)
+            if "SPXERR_INVALID_HEADER" in message:
+                raise HTTPException(
+                    status_code=415,
+                    detail="The audio format could not be read. Record again in the browser and submit WAV audio.",
+                ) from exc
+            print(f"[pronunciation] Azure Speech SDK failed: {exc}", flush=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Speech service could not process the audio. Please try again.",
+            ) from exc
 
         if result.reason == speechsdk.ResultReason.NoMatch:
             raise HTTPException(status_code=400, detail="Could not recognize speech. Please speak clearly and try again.")
+        if result.reason == speechsdk.ResultReason.Canceled:
+            details = speechsdk.CancellationDetails(result)
+            raise HTTPException(status_code=502, detail=f"Speech recognition was canceled: {details.reason}")
         if result.reason != speechsdk.ResultReason.RecognizedSpeech:
             raise HTTPException(status_code=500, detail=f"Speech recognition failed: {result.reason}")
 
@@ -742,9 +960,23 @@ async def _run_pronunciation_assessment(
 async def assess_pronunciation(
     audio: UploadFile = File(...),
     reference_text: str = Form(...),
-    user=Depends(get_optional_user),
+    user=Depends(require_student),
     db: Session = Depends(get_db),
 ):
+    audio_content = await audio.read()
+    audio_suffix = _validate_audio_upload(audio, audio_content)
+    audio_seconds = _estimate_audio_seconds(audio, audio_content)
+    await audio.seek(0)
+    consume_ai_units(
+        db,
+        user_id=user.id,
+        route="pronunciation_assess",
+        extra_metadata={
+            "reference_length": len(reference_text),
+            "audio_seconds": audio_seconds,
+            "audio_suffix": audio_suffix,
+        },
+    )
     return await _run_pronunciation_assessment(audio, reference_text, user, db)
 
 
@@ -752,9 +984,23 @@ async def assess_pronunciation(
 async def quick_pronunciation_check(
     audio: UploadFile = File(...),
     reference_text: str = Form(...),
-    user=Depends(get_optional_user),
+    user=Depends(require_student),
     db: Session = Depends(get_db),
 ):
+    audio_content = await audio.read()
+    audio_suffix = _validate_audio_upload(audio, audio_content)
+    audio_seconds = _estimate_audio_seconds(audio, audio_content)
+    await audio.seek(0)
+    consume_ai_units(
+        db,
+        user_id=user.id,
+        route="pronunciation_quick_check",
+        extra_metadata={
+            "reference_length": len(reference_text),
+            "audio_seconds": audio_seconds,
+            "audio_suffix": audio_suffix,
+        },
+    )
     result = await _run_pronunciation_assessment(audio, reference_text, user, db)
     return {
         "score": round(result.pronunciation_score, 1),

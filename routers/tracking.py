@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from db import get_db
 from deps import require_student
 from models import ActivityEvent, ExerciseAttempt, User
+from routers.admin_monitor import invalidate_admin_monitor_cache
 from schemas import (
     ActivityEventCompatOut,
     ActivityEventIn,
@@ -124,7 +125,7 @@ def create_attempt_internal(
     db: Session,
     user_id: int,
     exercise_type: str,
-    exercise_id: str,
+    exercise_id: Optional[str],
     extra_metadata: dict = None,
 ) -> ExerciseAttempt:
     attempt = ExerciseAttempt(
@@ -138,6 +139,7 @@ def create_attempt_internal(
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
+    invalidate_admin_monitor_cache()
 
     try:
         track(user_id, "exercise_started", feature=exercise_type, exercise_id=exercise_id)
@@ -163,7 +165,7 @@ def finish_attempt_internal(
 
     attempt.finished_at = _utcnow()
     if duration_seconds is not None:
-        attempt.duration_seconds = duration_seconds
+        attempt.duration_seconds = max(1, int(duration_seconds))
     if score is not None:
         attempt.score = score
     if passed is not None:
@@ -174,6 +176,7 @@ def finish_attempt_internal(
         attempt.extra_metadata = current
 
     db.commit()
+    invalidate_admin_monitor_cache()
 
     try:
         track(
@@ -194,21 +197,13 @@ def start_attempt(
     user: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    attempt = ExerciseAttempt(
+    attempt = create_attempt_internal(
+        db=db,
         user_id=user.id,
         exercise_type=payload.exercise_type,
         exercise_id=payload.exercise_id,
         extra_metadata=payload.extra_metadata,
     )
-
-    db.add(attempt)
-    db.commit()
-    db.refresh(attempt)
-
-    try:
-        track(user.id, "exercise_started", feature=attempt.exercise_type, exercise_id=attempt.exercise_id)
-    except Exception:
-        pass
 
     return _serialize_attempt_compat(attempt)
 
@@ -236,7 +231,7 @@ def finish_attempt(
         attempt.finished_at = _utcnow()
 
     if payload.duration_seconds is not None:
-        attempt.duration_seconds = payload.duration_seconds
+        attempt.duration_seconds = max(1, int(payload.duration_seconds))
     if payload.score is not None:
         attempt.score = payload.score
     if payload.passed is not None:
@@ -253,6 +248,7 @@ def finish_attempt(
 
     db.commit()
     db.refresh(attempt)
+    invalidate_admin_monitor_cache()
 
     try:
         event_name = "exercise_abandoned" if status_value == "abandoned" else "exercise_submitted"
@@ -296,6 +292,7 @@ def log_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+    invalidate_admin_monitor_cache()
 
     try:
         track(user.id, payload.event_type, feature=feature, **metadata)

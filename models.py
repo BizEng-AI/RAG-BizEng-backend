@@ -30,6 +30,7 @@ class User(Base):
     tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     attempts = relationship("ExerciseAttempt", back_populates="user", cascade="all, delete-orphan")
     events = relationship("ActivityEvent", back_populates="user", cascade="all, delete-orphan")
+    ai_usage_events = relationship("AIUsageEvent", back_populates="user", cascade="all, delete-orphan")
 
 
 class Role(Base):
@@ -57,12 +58,12 @@ class UserRole(Base):
 
 
 class RefreshToken(Base):
-    """JWT refresh tokens - server-side tracking for revocation"""
+    """Refresh-token records used for rotation and revocation tracking."""
     __tablename__ = "refresh_tokens"
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    token = Column(Text, unique=True, nullable=False)  # Opaque UUID string
+    token = Column(Text, unique=True, nullable=False)  # SHA-256 hash of the issued opaque token
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     revoked = Column(Boolean, default=False, nullable=False)
 
@@ -125,4 +126,24 @@ class ActivityEvent(Base):
 
     def __repr__(self):
         return f"<ActivityEvent {self.event_type} by user {self.user_id}>"
+
+
+class AIUsageEvent(Base):
+    """
+    Budget guardrail for paid AI features.
+    Stores only route metadata and weighted usage units, not user content.
+    """
+    __tablename__ = "ai_usage_events"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    route = Column(String(80), nullable=False, index=True)
+    units = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    extra_metadata = Column(JSON, nullable=True)
+
+    user = relationship("User", back_populates="ai_usage_events")
+
+    def __repr__(self):
+        return f"<AIUsageEvent route={self.route} user={self.user_id} units={self.units}>"
 

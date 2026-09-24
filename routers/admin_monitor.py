@@ -3,7 +3,7 @@ Admin monitoring endpoints for dashboard feeds (admin-only).
 Returns small chart-ready arrays like [{"day":"YYYY-MM-DD","value":N}] or simple key-count maps.
 Caching: simple in-memory TTL cache (60s) to avoid DB load.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from decimal import Decimal
 
@@ -22,6 +22,11 @@ router = APIRouter(prefix="/admin/monitor", tags=["admin-monitor"])
 _CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_TTL = 60  # seconds
 CACHE_HEADER = {"Cache-Control": "public, max-age=60, s-maxage=60"}
+
+
+def invalidate_admin_monitor_cache() -> None:
+    """Clear dashboard cache so fresh student activity appears on the next fetch."""
+    _CACHE.clear()
 
 
 def _sanitize_days(days: int) -> int:
@@ -59,7 +64,7 @@ def _coerce_float(value):
 
 
 def _cached(key: str, compute_func):
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     e = _CACHE.get(key)
     if e and now - e["ts"] < CACHE_TTL:
         return e["value"]
@@ -69,7 +74,7 @@ def _cached(key: str, compute_func):
 
 
 def _init_day_buckets(days: int = 30):
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=days - 1)
     buckets = {(start + timedelta(days=i)).isoformat(): 0 for i in range(days)}
     return start, buckets
@@ -77,7 +82,7 @@ def _init_day_buckets(days: int = 30):
 
 def _group_counts_by_day(queryset, date_attr_name: str, days: int = 30):
     """Helper to return list of {day, value} for last `days` days."""
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=days - 1)
 
     # Build histogram dict with zeros
@@ -117,7 +122,7 @@ def get_activity_events(db: Session = Depends(get_db), _ = Depends(require_admin
             """)
             res = db.execute(sql).fetchall()
             # build dict
-            today = datetime.utcnow().date()
+            today = datetime.now(timezone.utc).date()
             start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res:
@@ -144,7 +149,7 @@ def get_exercise_attempts(db: Session = Depends(get_db), _ = Depends(require_adm
                 GROUP BY DATE(started_at)
             """)
             res = db.execute(sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res:
                 d = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
@@ -197,7 +202,7 @@ def get_user_signups(db: Session = Depends(get_db), _ = Depends(require_admin)):
                 GROUP BY DATE(created_at)
             """)
             res = db.execute(sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res:
                 d = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
@@ -252,13 +257,13 @@ def active_students_today(db: Session = Depends(get_db), _ = Depends(require_adm
             )
             count = db.execute(sql).scalar() or 0
             return {
-                "date": datetime.utcnow().date().isoformat(),
+                "date": datetime.now(timezone.utc).date().isoformat(),
                 "active_students": int(count)
             }
         except Exception as e:
             print(f"[active_today] Error: {e}", flush=True)
             return {
-                "date": datetime.utcnow().date().isoformat(),
+                "date": datetime.now(timezone.utc).date().isoformat(),
                 "active_students": 0
             }
 
@@ -381,7 +386,7 @@ def get_overview(db: Session = Depends(get_db), _ = Depends(require_admin)):
                 GROUP BY DATE(timestamp)
             """)
             res_ae = db.execute(sql_ae).fetchall()
-            today = datetime.utcnow().date()
+            today = datetime.now(timezone.utc).date()
             start = today - timedelta(days=29)
             out_ae = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res_ae:
@@ -617,7 +622,7 @@ def get_attempts(db: Session = Depends(get_db), _ = Depends(require_admin)):
                 GROUP BY DATE(started_at)
             """)
             res = db.execute(sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res:
                 d = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
@@ -642,7 +647,7 @@ def get_events(db: Session = Depends(get_db), _ = Depends(require_admin)):
             # daily histogram for total events
             day_sql = text("SELECT DATE(timestamp) as day, COUNT(*) as cnt FROM activity_events WHERE timestamp >= (CURRENT_DATE - INTERVAL '29 days') GROUP BY DATE(timestamp)")
             rows = db.execute(day_sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in rows:
                 d = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
@@ -669,7 +674,7 @@ def get_sessions(db: Session = Depends(get_db), _ = Depends(require_admin)):
                 GROUP BY DATE(started_at)
             """)
             res = db.execute(sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for row in res:
                 d = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
@@ -691,7 +696,7 @@ def get_users(db: Session = Depends(get_db), _ = Depends(require_admin)):
             # reuse signups histogram
             sql = text("SELECT DATE(created_at) as day, COUNT(*) as cnt FROM users WHERE created_at >= (CURRENT_DATE - INTERVAL '29 days') GROUP BY DATE(created_at)")
             rows = db.execute(sql).fetchall()
-            today = datetime.utcnow().date(); start = today - timedelta(days=29)
+            today = datetime.now(timezone.utc).date(); start = today - timedelta(days=29)
             out = { (start + timedelta(days=i)).isoformat(): 0 for i in range(30) }
             for r in rows:
                 d = r[0].isoformat() if hasattr(r[0], 'isoformat') else str(r[0])

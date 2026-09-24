@@ -5,7 +5,7 @@ Privacy-protected: NO message content, audio, or transcripts
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from db import get_db
@@ -13,7 +13,7 @@ from deps import require_admin
 from models import User, UserRole, Role, ExerciseAttempt, ActivityEvent
 from schemas import (
     StudentListItem, StudentSummary, GroupSummary,
-    AdminDashboard, ExerciseAttemptOut, ActivityEventOut
+    AdminDashboard, AdminPracticeLogItem, ExerciseAttemptOut, ActivityEventOut
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -47,7 +47,7 @@ def get_dashboard(_ = Depends(require_admin), db: Session = Depends(get_db)):
     ).count()
 
     # Active students (last 7 days)
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     active_students_7d = db.query(func.count(func.distinct(ActivityEvent.user_id))).filter(
         ActivityEvent.timestamp >= week_ago
     ).scalar()
@@ -116,6 +116,63 @@ def list_students(
         )
         for s in students
     ]
+
+
+@router.get("/practice-log", response_model=list[AdminPracticeLogItem])
+def get_practice_log(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(100, ge=1, le=500),
+    student_id: Optional[int] = Query(None),
+    feature: Optional[str] = Query(None),
+    _ = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Recent practice metadata for teacher review.
+
+    Shows who used each feature, scenario/prompt metadata, time, duration,
+    message counts, word counts, and hint counts. It does not return message
+    text, audio, or transcripts.
+    """
+    start = datetime.now(timezone.utc) - timedelta(days=days)
+    query = (
+        db.query(ExerciseAttempt, User)
+        .join(User, User.id == ExerciseAttempt.user_id)
+        .filter(ExerciseAttempt.started_at >= start)
+    )
+    if student_id is not None:
+        query = query.filter(ExerciseAttempt.user_id == student_id)
+    if feature:
+        query = query.filter(ExerciseAttempt.exercise_type == feature)
+
+    rows = query.order_by(ExerciseAttempt.started_at.desc()).limit(limit).all()
+    result: list[AdminPracticeLogItem] = []
+    for attempt, user in rows:
+        metadata = attempt.extra_metadata or {}
+        status = str(metadata.get("status") or ("completed" if attempt.finished_at else "started"))
+        result.append(
+            AdminPracticeLogItem(
+                attempt_id=attempt.id,
+                user_id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                group_number=user.group_number,
+                exercise_type=attempt.exercise_type,
+                exercise_id=attempt.exercise_id,
+                scenario_id=metadata.get("scenario_id"),
+                scenario_title=metadata.get("scenario_title"),
+                prompt_title=metadata.get("prompt_title"),
+                started_at=attempt.started_at,
+                finished_at=attempt.finished_at,
+                duration_seconds=attempt.duration_seconds,
+                message_count=int(metadata.get("message_count") or metadata.get("user_message_count") or 0),
+                word_count=int(metadata.get("word_count") or metadata.get("user_message_words") or 0),
+                hint_count=int(metadata.get("hints_used") or metadata.get("hint_count") or 0),
+                status=status,
+                last_activity_at=metadata.get("last_activity_at"),
+            )
+        )
+    return result
 
 
 @router.get("/students/{student_id}", response_model=StudentSummary)
@@ -236,51 +293,53 @@ def get_group_summaries(_ = Depends(require_admin), db: Session = Depends(get_db
     if not student_role:
         return []
 
-    # Get all groups
-    groups = db.query(User.group_number).join(UserRole).filter(
-        UserRole.role_id == student_role.id,
-        User.group_number.isnot(None)
-    ).distinct().all()
+    rows = (
+        db.query(
+            User.group_number,
+            User.id.label("student_id"),
+            ExerciseAttempt.id.label("attempt_id"),
+            ExerciseAttempt.exercise_type,
+            ExerciseAttempt.score,
+        )
+        .join(UserRole, UserRole.user_id == User.id)
+        .outerjoin(ExerciseAttempt, ExerciseAttempt.user_id == User.id)
+        .filter(
+            UserRole.role_id == student_role.id,
+            User.group_number.isnot(None),
+        )
+        .all()
+    )
+
+    grouped: dict[str, dict] = {}
+    for group_num, student_id, attempt_id, exercise_type, score in rows:
+        bucket = grouped.setdefault(
+            group_num,
+            {"students": set(), "attempts": 0, "scores": [], "features": {}},
+        )
+        bucket["students"].add(student_id)
+        if attempt_id is None:
+            continue
+        bucket["attempts"] += 1
+        if score is not None:
+            bucket["scores"].append(score)
+        if exercise_type:
+            bucket["features"][exercise_type] = bucket["features"].get(exercise_type, 0) + 1
 
     summaries = []
-
-    for (group_num,) in groups:
-        # Students in group
-        student_ids = [
-            u.id for u in db.query(User).join(UserRole).filter(
-                UserRole.role_id == student_role.id,
-                User.group_number == group_num
-            ).all()
-        ]
-
-        if not student_ids:
-            continue
-
-        # Attempts by this group
-        attempts = db.query(ExerciseAttempt).filter(
-            ExerciseAttempt.user_id.in_(student_ids)
-        ).all()
-
-        total_attempts = len(attempts)
-
-        # Average score
-        scores = [a.score for a in attempts if a.score is not None]
+    for group_num, bucket in grouped.items():
+        scores = bucket["scores"]
+        features = bucket["features"]
         avg_score = sum(scores) / len(scores) if scores else None
+        most_used = max(features.items(), key=lambda item: item[1])[0] if features else None
+        summaries.append(
+            GroupSummary(
+                group_number=group_num,
+                student_count=len(bucket["students"]),
+                total_attempts=bucket["attempts"],
+                avg_score=round(avg_score, 2) if avg_score is not None else None,
+                most_used_feature=most_used,
+            )
+        )
 
-        # Most used feature
-        feature_counts = {}
-        for a in attempts:
-            feature_counts[a.exercise_type] = feature_counts.get(a.exercise_type, 0) + 1
-
-        most_used = max(feature_counts.items(), key=lambda x: x[1])[0] if feature_counts else None
-
-        summaries.append(GroupSummary(
-            group_number=group_num,
-            student_count=len(student_ids),
-            total_attempts=total_attempts,
-            avg_score=round(avg_score, 2) if avg_score is not None else None,
-            most_used_feature=most_used
-        ))
-
-    return summaries
+    return sorted(summaries, key=lambda summary: (-summary.student_count, summary.group_number.lower()))
 

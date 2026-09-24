@@ -6,21 +6,38 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+from security import validate_new_password
 
 
 class RegisterIn(BaseModel):
     """Student registration."""
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=2, max_length=120)
     group_number: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return str(value).strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        return validate_new_password(value)
 
 
 class LoginIn(BaseModel):
     """Login request."""
     email: EmailStr
     password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return str(value).strip().lower()
 
 
 class TokenOut(BaseModel):
@@ -33,6 +50,19 @@ class TokenOut(BaseModel):
 class RefreshIn(BaseModel):
     """Refresh token request."""
     refresh_token: str
+
+
+class DeleteAccountIn(BaseModel):
+    """Authenticated self-service account deletion request."""
+    current_password: str = Field(min_length=1, max_length=128)
+    confirm_phrase: str = Field(default="DELETE", min_length=6, max_length=6)
+
+    @field_validator("confirm_phrase")
+    @classmethod
+    def validate_confirm_phrase(cls, value: str) -> str:
+        if value != "DELETE":
+            raise ValueError('Please type DELETE to confirm account removal.')
+        return value
 
 
 class MeOut(BaseModel):
@@ -187,4 +217,26 @@ class AdminDashboard(BaseModel):
     total_attempts: int
     avg_completion_rate: float
     popular_features: dict[str, int]
+
+
+class AdminPracticeLogItem(BaseModel):
+    """Detailed practice metadata for teacher review without message content."""
+    attempt_id: int
+    user_id: int
+    email: EmailStr
+    display_name: Optional[str]
+    group_number: Optional[str]
+    exercise_type: str
+    exercise_id: Optional[str]
+    scenario_id: Optional[str] = None
+    scenario_title: Optional[str] = None
+    prompt_title: Optional[str] = None
+    started_at: datetime
+    finished_at: Optional[datetime]
+    duration_seconds: Optional[int]
+    message_count: int = 0
+    word_count: int = 0
+    hint_count: int = 0
+    status: str
+    last_activity_at: Optional[str] = None
 

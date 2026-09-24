@@ -22,5 +22,5 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # copy app code last for faster rebuilds
 COPY . .
 
-# if your app object is in app/main.py use "app.main:app"
-CMD ["/opt/venv/bin/uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8020"]
+# Render provides the listening port at runtime through $PORT.
+CMD ["/bin/sh", "-c", "exec /opt/venv/bin/uvicorn app:app --host 0.0.0.0 --port ${PORT:-8020}"]

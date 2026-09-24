@@ -11,9 +11,13 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from roleplay_scenarios import Scenario, get_scenario
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -51,9 +55,12 @@ class RoleplaySession:
     session_id: str
     scenario_id: str
     student_name: Optional[str]
+    owner_user_id: Optional[int]
+    use_rag: bool
     current_stage: int  # index in scenario.stages
     started_at: str
     updated_at: str
+    attempt_id: Optional[int] = None
 
     # Memory layers
     dialogue_history: List[DialogueTurn] = field(default_factory=list)
@@ -71,9 +78,12 @@ class RoleplaySession:
             "session_id": self.session_id,
             "scenario_id": self.scenario_id,
             "student_name": self.student_name,
+            "owner_user_id": self.owner_user_id,
+            "use_rag": self.use_rag,
             "current_stage": self.current_stage,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
+            "attempt_id": self.attempt_id,
             "dialogue_history": [asdict(t) for t in self.dialogue_history],
             "episode_summaries": [asdict(e) for e in self.episode_summaries],
             "corrections_log": [asdict(c) for c in self.corrections_log],
@@ -89,9 +99,12 @@ class RoleplaySession:
             session_id=data["session_id"],
             scenario_id=data["scenario_id"],
             student_name=data.get("student_name"),
+            owner_user_id=data.get("owner_user_id"),
+            use_rag=data.get("use_rag", True),
             current_stage=data["current_stage"],
             started_at=data["started_at"],
             updated_at=data["updated_at"],
+            attempt_id=data.get("attempt_id"),
             dialogue_history=[DialogueTurn(**t) for t in data.get("dialogue_history", [])],
             episode_summaries=[EpisodeSummary(**e) for e in data.get("episode_summaries", [])],
             corrections_log=[Correction(**c) for c in data.get("corrections_log", [])],
@@ -113,11 +126,11 @@ class RoleplaySession:
         turn = DialogueTurn(
             speaker=speaker,
             message=message,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=utc_now_iso(),
             correction=correction
         )
         self.dialogue_history.append(turn)
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = utc_now_iso()
 
         # Check if we should create an episode summary
         if len(self.dialogue_history) % 8 == 0:  # Every 8 turns (4 exchanges)
@@ -131,7 +144,7 @@ class RoleplaySession:
             original=original,
             corrected=corrected,
             explanation=explanation,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=utc_now_iso()
         )
         self.corrections_log.append(correction)
 
@@ -171,7 +184,7 @@ class RoleplaySession:
             turn_range=f"{start_idx + 1}-{end_idx}",
             key_points=key_points[:3],  # Keep top 3
             student_performance=performance,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=utc_now_iso()
         )
         self.episode_summaries.append(summary)
 
@@ -180,12 +193,12 @@ class RoleplaySession:
         scenario = get_scenario(self.scenario_id)
         if scenario and self.current_stage < len(scenario.stages) - 1:
             self.current_stage += 1
-            self.updated_at = datetime.utcnow().isoformat()
+            self.updated_at = utc_now_iso()
             return True
         elif scenario and self.current_stage == len(scenario.stages) - 1:
             # Last stage completed
             self.is_completed = True
-            self.updated_at = datetime.utcnow().isoformat()
+            self.updated_at = utc_now_iso()
             return True
         return False
 
@@ -219,7 +232,12 @@ SESSIONS_DIR = Path(__file__).parent / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 
-def create_session(scenario_id: str, student_name: Optional[str] = None) -> RoleplaySession:
+def create_session(
+    scenario_id: str,
+    student_name: Optional[str] = None,
+    use_rag: bool = True,
+    owner_user_id: Optional[int] = None,
+) -> RoleplaySession:
     """Create a new roleplay session"""
     scenario = get_scenario(scenario_id)
     if not scenario:
@@ -229,9 +247,11 @@ def create_session(scenario_id: str, student_name: Optional[str] = None) -> Role
         session_id=str(uuid.uuid4()),
         scenario_id=scenario_id,
         student_name=student_name,
+        owner_user_id=owner_user_id,
+        use_rag=use_rag,
         current_stage=0,
-        started_at=datetime.utcnow().isoformat(),
-        updated_at=datetime.utcnow().isoformat()
+        started_at=utc_now_iso(),
+        updated_at=utc_now_iso()
     )
 
     save_session(session)
@@ -241,8 +261,18 @@ def create_session(scenario_id: str, student_name: Optional[str] = None) -> Role
 def save_session(session: RoleplaySession):
     """Save session to disk"""
     filepath = SESSIONS_DIR / f"{session.session_id}.json"
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(session.to_dict(), f, indent=2, ensure_ascii=False)
+    temp_filepath = filepath.with_suffix(".json.tmp")
+    try:
+        with open(temp_filepath, "w", encoding="utf-8") as f:
+            json.dump(session.to_dict(), f, indent=2, ensure_ascii=False)
+        temp_filepath.replace(filepath)
+    except OSError as exc:
+        try:
+            if temp_filepath.exists():
+                temp_filepath.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(f"Failed to save roleplay session {session.session_id}: {exc}") from exc
 
 
 def load_session(session_id: str) -> Optional[RoleplaySession]:
@@ -251,27 +281,76 @@ def load_session(session_id: str) -> Optional[RoleplaySession]:
     if not filepath.exists():
         return None
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    return RoleplaySession.from_dict(data)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return RoleplaySession.from_dict(data)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        print(f"[roleplay_session] failed to load session {session_id}: {exc}", flush=True)
+        return None
 
 
 def delete_session(session_id: str):
     """Delete a session"""
     filepath = SESSIONS_DIR / f"{session_id}.json"
-    if filepath.exists():
+    if not filepath.exists():
+        return
+
+    try:
         filepath.unlink()
+    except OSError as exc:
+        print(f"[roleplay_session] failed to delete session {session_id}: {exc}", flush=True)
 
 
-def list_user_sessions(student_name: Optional[str] = None, active_only: bool = False) -> List[Dict[str, Any]]:
+def delete_sessions_for_user(owner_user_id: int) -> int:
+    """
+    Delete every persisted roleplay session owned by a specific user.
+    Raises when a matching file cannot be removed so account deletion can fail closed.
+    """
+    deleted = 0
+    errors: list[str] = []
+
+    for filepath in SESSIONS_DIR.glob("*.json"):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[roleplay_session] skipping unreadable session file {filepath.name}: {exc}", flush=True)
+            continue
+
+        if data.get("owner_user_id") != owner_user_id:
+            continue
+
+        try:
+            filepath.unlink()
+            deleted += 1
+        except OSError as exc:
+            errors.append(f"{filepath.name}: {exc}")
+
+    if errors:
+        raise RuntimeError("Failed to delete one or more roleplay sessions: " + "; ".join(errors))
+
+    return deleted
+
+
+def list_user_sessions(
+    student_name: Optional[str] = None,
+    active_only: bool = False,
+    owner_user_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """List all sessions, optionally filtered"""
     sessions = []
     for filepath in SESSIONS_DIR.glob("*.json"):
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[roleplay_session] skipping unreadable session file {filepath.name}: {exc}", flush=True)
+            continue
 
         # Apply filters
+        if owner_user_id is not None and data.get("owner_user_id") != owner_user_id:
+            continue
         if student_name and data.get("student_name") != student_name:
             continue
         if active_only and data.get("is_completed"):
@@ -283,6 +362,7 @@ def list_user_sessions(student_name: Optional[str] = None, active_only: bool = F
             "scenario_id": data["scenario_id"],
             "scenario_title": scenario.title if scenario else "Unknown",
             "student_name": data.get("student_name"),
+            "owner_user_id": data.get("owner_user_id"),
             "current_stage": data["current_stage"],
             "started_at": data["started_at"],
             "updated_at": data["updated_at"],

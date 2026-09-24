@@ -1,10 +1,11 @@
-﻿# roleplay_api.py
+# roleplay_api.py
 """
 FastAPI endpoints for the roleplay feature.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
 
 from roleplay_session import (
     create_session, load_session, save_session, delete_session, list_user_sessions
@@ -12,8 +13,10 @@ from roleplay_session import (
 from roleplay_scenarios import list_scenarios, get_scenario
 from roleplay_engine import engine
 from tracking import track
-from deps import get_optional_user
+from deps import require_student
 from db import get_db
+from models import ExerciseAttempt
+from usage_limits import consume_ai_units
 
 
 router = APIRouter(prefix="/roleplay", tags=["roleplay"])
@@ -26,6 +29,7 @@ router = APIRouter(prefix="/roleplay", tags=["roleplay"])
 class StartSessionRequest(BaseModel):
     scenario_id: str
     student_name: Optional[str] = None
+    use_rag: Optional[bool] = True
 
 
 class StartSessionResponse(BaseModel):
@@ -76,6 +80,65 @@ class SessionInfoResponse(BaseModel):
     hints_used: int
 
 
+def _allow_or_verify_session_access(session, user, adopt_if_authenticated: bool = False):
+    if session.owner_user_id is None:
+        if adopt_if_authenticated and user is not None:
+            session.owner_user_id = user.id
+            save_session(session)
+        return session
+
+    if user is None or session.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this session")
+
+    return session
+
+
+def _count_words(text: str) -> int:
+    return len([part for part in text.strip().split() if part])
+
+
+def _session_duration_seconds(session) -> int:
+    try:
+        started = datetime.fromisoformat(str(session.started_at).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(1, int((datetime.now(timezone.utc) - started).total_seconds()))
+    except Exception:
+        return 1
+
+
+def _update_roleplay_attempt(db, session, scenario=None, status: str = "in_progress") -> None:
+    attempt_id = getattr(session, "attempt_id", None)
+    if not attempt_id:
+        return
+
+    attempt = db.get(ExerciseAttempt, attempt_id)
+    if not attempt:
+        return
+
+    student_turns = [turn for turn in session.dialogue_history if turn.speaker == "student"]
+    metadata = attempt.extra_metadata or {}
+    metadata.update(
+        {
+            "status": "completed" if session.is_completed else status,
+            "scenario_id": session.scenario_id,
+            "scenario_title": scenario.title if scenario else metadata.get("scenario_title"),
+            "message_count": len(student_turns),
+            "word_count": sum(_count_words(turn.message) for turn in student_turns),
+            "total_turns": len(session.dialogue_history),
+            "hints_used": session.hints_used,
+            "corrections_count": len(session.corrections_log),
+            "last_activity_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    attempt.duration_seconds = _session_duration_seconds(session)
+    attempt.extra_metadata = metadata
+    if session.is_completed and attempt.finished_at is None:
+        attempt.finished_at = datetime.now(timezone.utc)
+        attempt.passed = True
+    db.commit()
+
+
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
@@ -120,7 +183,7 @@ def get_scenario_details(scenario_id: str):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), db = Depends(get_db)):
+def start_roleplay(req: StartSessionRequest, user = Depends(require_student), db = Depends(get_db)):
     """
     Start a new roleplay session.
     Returns session info and AI's opening message.
@@ -134,7 +197,12 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), 
             raise HTTPException(status_code=404, detail=f"Scenario not found: {req.scenario_id}")
 
         # Create session
-        session = create_session(req.scenario_id, req.student_name)
+        session = create_session(
+            req.scenario_id,
+            req.student_name,
+            use_rag=bool(req.use_rag),
+            owner_user_id=user.id,
+        )
 
         # Create attempt record
         if user:
@@ -146,7 +214,8 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), 
                     exercise_id=session.session_id,
                     extra_metadata={
                         "scenario_id": req.scenario_id,
-                        "scenario_title": scenario.title
+                        "scenario_title": scenario.title,
+                        "use_rag": bool(req.use_rag),
                     }
                 )
                 session.attempt_id = attempt.id  # Store for later
@@ -164,8 +233,7 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), 
 
         # Instrument: roleplay started
         try:
-            uid = user.id if user else None
-            track(uid, "started_roleplay", feature="roleplay", scenario_id=req.scenario_id)
+            track(user.id, "started_roleplay", feature="roleplay", scenario_id=req.scenario_id)
         except Exception:
             pass
 
@@ -187,7 +255,7 @@ def start_roleplay(req: StartSessionRequest, user = Depends(get_optional_user), 
 
 
 @router.post("/turn", response_model=TurnResponse)
-def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depends(get_db)):
+def submit_turn(req: TurnRequest, user = Depends(require_student), db = Depends(get_db)):
     """
     Submit student's message and get AI's response with feedback.
     """
@@ -207,6 +275,7 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
             print(f"[roleplay/turn] FAIL Session not found: {req.session_id}", flush=True)
             raise HTTPException(status_code=404, detail=f"Session not found: {req.session_id}")
 
+        session = _allow_or_verify_session_access(session, user, adopt_if_authenticated=True)
         print(f"[roleplay/turn] OK Session loaded (scenario: {session.scenario_id})", flush=True)
 
         if session.is_completed:
@@ -229,12 +298,17 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
         if not req.message or len(req.message.strip()) < 2:
             raise HTTPException(status_code=400, detail="Message is too short")
 
-        print(f"[roleplay/turn] Processing message: '{req.message[:50]}...'", flush=True)
+        print(f"[roleplay/turn] Processing message_length={len(req.message)}", flush=True)
+        consume_ai_units(
+            db,
+            user_id=user.id,
+            route="roleplay_turn",
+            extra_metadata={"session_id": req.session_id, "message_length": len(req.message)},
+        )
 
         # Instrument: student sent a message
         try:
-            uid = user.id if user else None
-            track(uid, "roleplay_turn_submitted", feature="roleplay", session_id=req.session_id, message_length=len(req.message))
+            track(user.id, "roleplay_turn_submitted", feature="roleplay", session_id=req.session_id, message_length=len(req.message))
         except Exception as e:
             print(f"[roleplay/turn] Warning: track() failed: {e}", flush=True)
 
@@ -247,16 +321,22 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
             print(f"[roleplay/turn] FAIL Engine error: {type(e).__name__}: {e}", flush=True)
             raise HTTPException(status_code=500, detail=f"Roleplay engine error: {str(e)}")
 
+        scenario = get_scenario(session.scenario_id)
+        try:
+            _update_roleplay_attempt(db, session, scenario=scenario)
+        except Exception as e:
+            print(f"[roleplay] Warning: Failed to update attempt stats: {e}", flush=True)
+
         # If session just completed, finish the attempt
-        if result["is_completed"] and user and hasattr(session, 'attempt_id'):
+        if result["is_completed"] and user and getattr(session, "attempt_id", None):
             try:
                 # Parse started_at from ISO string to datetime
-                from datetime import datetime
+                from datetime import datetime, timezone
                 if isinstance(session.started_at, str):
                     started = datetime.fromisoformat(session.started_at.replace('Z', '+00:00'))
                 else:
                     started = session.started_at
-                duration = int((datetime.utcnow() - started).total_seconds())
+                duration = int((datetime.now(timezone.utc) - started).total_seconds())
 
                 finish_attempt_internal(
                     db=db,
@@ -286,19 +366,19 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
                     "correct": correction.get("corrected", ""),
                     "explanation": correction.get("explanation", "")
                 }],
-                "feedback": f"Priority: {correction.get('priority', 'medium')}. Keep practicing!"
+                "feedback": "Use the corrected phrasing and keep your sentence clear.",
+                "severity": correction.get("priority", "medium"),
             }
         else:
             converted_correction = {
                 "has_errors": False,
                 "errors": [],
-                "feedback": "Great job! Your response was appropriate."
+                "feedback": None
             }
 
         # Instrument: AI replied
         try:
-            uid = user.id if user else None
-            track(uid, "roleplay_ai_response", feature="roleplay", session_id=req.session_id, ai_message_length=len(result.get('ai_message','')))
+            track(user.id, "roleplay_ai_response", feature="roleplay", session_id=req.session_id, ai_message_length=len(result.get('ai_message','')))
         except Exception:
             pass
 
@@ -319,7 +399,7 @@ def submit_turn(req: TurnRequest, user = Depends(get_optional_user), db = Depend
 
 
 @router.post("/hint", response_model=HintResponse)
-def get_hint(req: HintRequest):
+def get_hint(req: HintRequest, user = Depends(require_student), db = Depends(get_db)):
     """
     Get a hint for the current stage without advancing.
     """
@@ -328,13 +408,26 @@ def get_hint(req: HintRequest):
         if not session:
             raise HTTPException(status_code=404, detail=f"Session not found: {req.session_id}")
 
+        session = _allow_or_verify_session_access(session, user, adopt_if_authenticated=True)
         if session.is_completed:
             return HintResponse(
                 hint="You've completed this roleplay. Well done!",
                 hints_used=session.hints_used
             )
 
+        consume_ai_units(
+            db,
+            user_id=user.id,
+            route="roleplay_hint",
+            extra_metadata={"session_id": req.session_id},
+        )
         hint = engine.get_hint(session)
+        scenario = get_scenario(session.scenario_id)
+        try:
+            _update_roleplay_attempt(db, session, scenario=scenario, status="hint_used")
+            track(user.id, "roleplay_hint_used", feature="roleplay", session_id=req.session_id, scenario_id=session.scenario_id)
+        except Exception:
+            pass
 
         return HintResponse(
             hint=hint,
@@ -348,7 +441,7 @@ def get_hint(req: HintRequest):
 
 
 @router.get("/session/{session_id}", response_model=SessionInfoResponse)
-def get_session_info(session_id: str):
+def get_session_info(session_id: str, user = Depends(require_student)):
     """
     Get detailed information about a session.
     """
@@ -357,6 +450,7 @@ def get_session_info(session_id: str):
         if not session:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
+        session = _allow_or_verify_session_access(session, user, adopt_if_authenticated=True)
         scenario = get_scenario(session.scenario_id)
         if not scenario:
             raise HTTPException(status_code=404, detail="Scenario not found")
@@ -391,13 +485,14 @@ def get_session_info(session_id: str):
 
 
 @router.delete("/session/{session_id}")
-def delete_session_endpoint(session_id: str):
+def delete_session_endpoint(session_id: str, user = Depends(require_student)):
     """Delete a roleplay session"""
     try:
         session = load_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
+        _allow_or_verify_session_access(session, user, adopt_if_authenticated=True)
         delete_session(session_id)
         return {"message": "Session deleted successfully"}
 
@@ -408,12 +503,16 @@ def delete_session_endpoint(session_id: str):
 
 
 @router.get("/sessions")
-def list_sessions(student_name: Optional[str] = None, active_only: bool = False):
+def list_sessions(student_name: Optional[str] = None, active_only: bool = False, user = Depends(require_student)):
     """
     List all sessions, optionally filtered by student name or active status.
     """
     try:
-        sessions = list_user_sessions(student_name=student_name, active_only=active_only)
+        sessions = list_user_sessions(
+            student_name=student_name,
+            active_only=active_only,
+            owner_user_id=user.id
+        )
         return {"sessions": sessions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list sessions: {str(e)}")
@@ -427,13 +526,22 @@ def _generate_opening_message(scenario, first_stage) -> str:
     """Generate the AI's opening message for the roleplay"""
 
     openings = {
-        "modern_zoo": "Hi. We have been reading about modern zoos in class. Do you think zoos still have an important role today?",
-        "education_systems": "Hello. I am curious about your education system. Could you tell me how it works and what students usually study?",
-        "university_life": "Hi. I have just started university and everything feels new. What is university life really like for you?",
-        "english_learning_games": "Hello. I want to improve my English outside class. What kinds of games, videos, or other materials actually help?",
-        "festivals_and_traditions": "Hi. I would love to hear about a festival or tradition that is important in your culture. Which one would you choose?",
+        "corporate_travel_planning": "Hello. We need to plan a 3-day business trip and stay within the company budget. Which option would you start with?",
         "personal_finance": "Hello. I am trying to manage my monthly budget better. Where should I start if I want to control my spending?",
-        "trade_and_markets": "Hi. We studied supply and demand today, but I still want practice explaining it. Can you describe a simple market change for me?"
+        "basic_economic_concepts": "Hi. Let us explain an economic idea clearly. How would you describe inflation or consumer choice in simple English?",
+        "supply_and_demand": "Hello. We studied supply and demand today. What usually happens when demand rises but supply stays low?",
+        "trade_and_markets": "Hi. We studied supply and demand today, but I still want practice explaining it. Can you describe a simple market change for me?",
+        "trans_siberian_route": "Hello. Let's plan an export shipment using the Trans-Siberian route. What should we check first?",
+        "transport_mode_comparison": "Hi. We need to choose between rail, sea, and air freight. Which option fits this delivery best?",
+        "delivery_delay_handling": "Hello. A shipment is delayed and the client is worried. How would you give this update politely?",
+        "customs_risk_briefing": "Hello. Before we approve this shipment, could you tell me the main customs and document risks?",
+        "international_business_meeting": "Hi everyone. Before we start, could you open this meeting and confirm the agenda?",
+        "contract_negotiation": "Hello. We are close to an agreement, but price and timeline still need negotiation. What would you propose?",
+        "follow_up_email_summary": "Hello. The meeting has ended. How would you summarize the main decisions and next steps in a follow-up message?",
+        "business_and_work": "Hi. Let us talk about business and work. Which workplace skill do you think matters most and why?",
+        "entrepreneur_pitch": "Hello. Please introduce your business idea briefly. What problem does it solve for the customer?",
+        "customer_complaint_response": "Hello. I am unhappy because my order arrived late and one item is missing. What can you do about this?",
+        "team_task_update": "Hi. Could you give me a quick update on your task? What is finished, and what is still blocked?"
     }
 
     return openings.get(scenario.id, f"Hello. Let's begin the {scenario.title} practice together.")

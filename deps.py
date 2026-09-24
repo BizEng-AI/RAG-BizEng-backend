@@ -3,6 +3,7 @@ FastAPI dependencies for authentication and RBAC
 """
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from jose import JWTError
 from typing import Optional
@@ -12,6 +13,14 @@ from models import User, UserRole
 from security import decode_token
 
 bearer = HTTPBearer(auto_error=False)
+
+
+def _normalized_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _email_filter(email: str):
+    return func.lower(func.trim(User.email)) == _normalized_email(email)
 
 
 def get_current_user(
@@ -56,7 +65,7 @@ def get_current_user(
         )
 
     user = db.query(User).filter(
-        User.email == email,
+        _email_filter(email),
         User.is_active.is_(True)
     ).first()
 
@@ -95,7 +104,7 @@ def get_optional_user(
     if not email:
         return None
 
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    user = db.query(User).filter(_email_filter(email), User.is_active.is_(True)).first()
     return user
 
 

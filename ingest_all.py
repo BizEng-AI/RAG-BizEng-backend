@@ -27,6 +27,21 @@ BOOKS = [
         "path": "C:/Users/sanja/rag-biz-english/data/book_3_ocr.txt",
         "source_id": "book_3_ocr",
         "name": "Business English Book 3"
+    },
+    {
+        "path": "C:/Users/sanja/rag-biz-english/data/lesson_2_trans_siberian_material.txt",
+        "source_id": "lesson_2_trans_siberian",
+        "name": "Lesson 2 Trans-Siberian Logistics"
+    },
+    {
+        "path": "C:/Users/sanja/rag-biz-english/data/lesson_3_international_meetings_material.txt",
+        "source_id": "lesson_3_international_meetings",
+        "name": "Lesson 3 International Meetings and Negotiation"
+    },
+    {
+        "path": "C:/Users/sanja/rag-biz-english/server/rag_materials/course_business_focus_material.txt",
+        "source_id": "course_business_focus_material",
+        "name": "Course Business Focus Material"
     }
 ]
 

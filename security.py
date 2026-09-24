@@ -1,61 +1,120 @@
 """
-Security utilities: password hashing, JWT token generation
-Uses bcrypt directly (no passlib) to avoid compatibility issues
+Security utilities: password hashing, refresh-token hashing, JWT token generation.
 """
+import hashlib
 import uuid
+
 import bcrypt
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHash, VerificationError, VerifyMismatchError
 from datetime import datetime, timezone
 from jose import jwt
 
-from settings import JWT_SECRET, JWT_ALG, ACCESS_EXPIRES, REFRESH_EXPIRES
+from settings import (
+    ACCESS_EXPIRES,
+    JWT_ALG,
+    JWT_SECRET,
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    REFRESH_EXPIRES,
+)
+
+
+PASSWORD_HASHER = PasswordHasher(
+    time_cost=3,
+    memory_cost=65536,
+    parallelism=4,
+    hash_len=32,
+    salt_len=16,
+)
+
+PASSWORD_POLICY_HINT = (
+    f"Password must be at least {PASSWORD_MIN_LENGTH} characters long and include both letters and numbers."
+)
+
+
+def validate_new_password(password: str) -> str:
+    """
+    Enforce the app's password policy for newly chosen passwords.
+    """
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(PASSWORD_POLICY_HINT)
+    if len(password) > PASSWORD_MAX_LENGTH:
+        raise ValueError(f"Password must be {PASSWORD_MAX_LENGTH} characters or fewer.")
+    if not any(char.isalpha() for char in password):
+        raise ValueError(PASSWORD_POLICY_HINT)
+    if not any(char.isdigit() for char in password):
+        raise ValueError(PASSWORD_POLICY_HINT)
+    return password
 
 
 def hash_password(password: str) -> str:
     """
-    Hash a password using bcrypt directly
+    Hash a password using Argon2id.
 
     Args:
         password: Plain text password
 
     Returns:
-        Bcrypt hash as string
+        Argon2id hash as string
     """
-    # Convert to bytes
-    password_bytes = password.encode('utf-8')
-
-    # Truncate to 72 bytes if necessary (bcrypt limit)
-    if len(password_bytes) > 72:
-        password_bytes = password_bytes[:72]
-
-    # Generate salt and hash
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password_bytes, salt)
-
-    # Return as string
-    return hashed.decode('utf-8')
+    return PASSWORD_HASHER.hash(password)
 
 
 def verify_password(password: str, hashed: str) -> bool:
     """
-    Verify a password against its bcrypt hash
+    Verify a password against its stored hash.
+
+    New hashes use Argon2id. Legacy bcrypt hashes remain supported so
+    existing users are not locked out during rollout.
 
     Args:
         password: Plain text password to check
-        hashed: Bcrypt hash string
+        hashed: Stored password hash string
 
     Returns:
         True if password matches, False otherwise
     """
-    # Convert to bytes
-    password_bytes = password.encode('utf-8')
-    hashed_bytes = hashed.encode('utf-8')
+    if not hashed:
+        return False
 
-    # Truncate to 72 bytes if necessary (bcrypt limit)
+    if hashed.startswith("$argon2id$"):
+        try:
+            return PASSWORD_HASHER.verify(hashed, password)
+        except (InvalidHash, VerificationError, VerifyMismatchError):
+            return False
+
+    password_bytes = password.encode("utf-8")
+    hashed_bytes = hashed.encode("utf-8")
     if len(password_bytes) > 72:
         password_bytes = password_bytes[:72]
+    try:
+        return bcrypt.checkpw(password_bytes, hashed_bytes)
+    except (TypeError, ValueError):
+        return False
 
-    # Verify
-    return bcrypt.checkpw(password_bytes, hashed_bytes)
+
+def needs_password_rehash(hashed: str) -> bool:
+    """
+    Return True when a stored password should be upgraded.
+    """
+    if not hashed:
+        return True
+
+    if not hashed.startswith("$argon2id$"):
+        return True
+
+    try:
+        return PASSWORD_HASHER.check_needs_rehash(hashed)
+    except InvalidHash:
+        return True
+
+
+def hash_refresh_token(token: str) -> str:
+    """
+    Hash opaque refresh tokens before storing them at rest.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def make_access_token(sub: str, roles: list[str]) -> str:

@@ -1,4 +1,4 @@
-﻿﻿# roleplay_referee.py
+﻿# roleplay_referee.py
 """
 Evaluates student responses and provides targeted corrections.
 Max 1 correction per turn to avoid overwhelming the student.
@@ -16,6 +16,13 @@ class RoleplayReferee:
 
     def __init__(self):
         self.error_types = ["grammar", "register", "vocabulary", "pragmatic"]
+        self.rude_patterns = [
+            r"\bshut\s+up\b",
+            r"\bgo\s+away\b",
+            r"\bstupid\b",
+            r"\bidc\b",
+            r"\bdon'?t\s+care\b",
+        ]
 
     def evaluate_response(
         self,
@@ -24,12 +31,29 @@ class RoleplayReferee:
         stage_objective: str,
         ai_role: str,
     ) -> Optional[Dict[str, Any]]:
+        normalized = student_message.strip().lower()
         if len(student_message.strip()) < 3:
             return {
                 "error_type": "pragmatic",
                 "original": student_message,
                 "corrected": "(Please give a fuller answer)",
                 "explanation": "Your answer is too short. Try to express one complete idea.",
+                "priority": "high",
+            }
+        if any(re.search(pattern, normalized) for pattern in self.rude_patterns):
+            return {
+                "error_type": "pragmatic",
+                "original": student_message,
+                "corrected": "Could you please give me a moment to think about the trip purpose?",
+                "explanation": "This is too rude for work practice. Use polite workplace language.",
+                "priority": "high",
+            }
+        if len(student_message.split()) < 4:
+            return {
+                "error_type": "pragmatic",
+                "original": student_message,
+                "corrected": "(Please answer with one complete sentence)",
+                "explanation": "Your reply is too short for the task. Add one clear idea.",
                 "priority": "high",
             }
 
@@ -42,7 +66,10 @@ class RoleplayReferee:
         stage_objective: str,
         ai_role: str,
     ) -> Optional[Dict[str, Any]]:
-        system_prompt = """You are a supportive English tutor evaluating a student's reply in a guided speaking practice.
+        system_prompt = """You are a supportive English tutor evaluating a student's reply in guided speaking practice.
+The learner level is A2-B1. B2 is the highest level allowed.
+Use short sentences and common words in feedback.
+Avoid idioms, long academic words, and formal business jargon.
 
 Analyze the student's message for errors in these categories (in priority order):
 1. Pragmatic - offensive language, totally off-topic replies, or replies that do not answer the task.
@@ -53,7 +80,8 @@ Analyze the student's message for errors in these categories (in priority order)
 Rules:
 - Flag only one issue, the most useful one to correct first.
 - If the reply is clear and suitable, return NO_ERROR.
-- Keep the correction short, natural, and learner-friendly.
+- Keep the correction short, natural, and learner-friendly for A2-B1 students.
+- Keep EXPLANATION to one short sentence.
 
 Return this exact format:
 ERROR_TYPE: [grammar|register|vocabulary|pragmatic|NO_ERROR]

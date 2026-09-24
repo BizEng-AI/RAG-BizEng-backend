@@ -1,0 +1,21 @@
+Sample business negotiation playbook
+
+Opening a negotiation meeting:
+- Thank you for joining today. I would like to confirm our agenda before we begin.
+- Our goal is to review pricing, delivery timing, and support responsibilities.
+- If that works for you, I can start with the proposal summary.
+
+Making a counteroffer politely:
+- I understand your position. From our perspective, the current price is above budget.
+- Would you consider a revised unit price if we increase the order volume?
+- We are willing to proceed provided that the delivery timeline is realistic.
+
+Clarifying delivery trade-offs:
+- Air freight is faster, but rail is often more cost-effective for planned shipments.
+- Rail can offer better value when the cargo is not urgent and the route is stable.
+- To reduce risk, we should confirm customs documents and add a schedule buffer.
+
+Closing the discussion:
+- Let me summarize the main points we agreed on today.
+- We have a provisional agreement on price, timeline, and next actions.
+- I will send a follow-up email with the updated terms and owners by Friday.

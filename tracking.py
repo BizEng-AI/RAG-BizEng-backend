@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 
 from db import SessionLocal
 from models import ActivityEvent
+from routers.admin_monitor import invalidate_admin_monitor_cache
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tracking")
 
@@ -30,6 +31,7 @@ def _write_event_sync(
         db.add(record)
         db.commit()
         db.refresh(record)
+        invalidate_admin_monitor_cache()
         return record.id
     finally:
         db.close()

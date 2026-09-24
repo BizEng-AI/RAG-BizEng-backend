@@ -1,0 +1,112 @@
+services:
+  - type: web
+    name: bizeng-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALG
+        value: HS256
+      - key: ACCESS_EXPIRES_MIN
+        value: "15"
+      - key: REFRESH_EXPIRES_DAYS
+        value: "30"
+      - key: PASSWORD_MIN_LENGTH
+        value: "10"
+      - key: PASSWORD_MAX_LENGTH
+        value: "128"
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: QDRANT_COLLECTION
+        value: Rag-biz
+      - key: AZURE_OPENAI_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        value: 2024-02-15-preview
+      - key: AZURE_OPENAI_CHAT_DEPLOYMENT
+        value: gpt-35-turbo
+      - key: AZURE_OPENAI_EMBEDDING_KEY
+        sync: false
+      - key: AZURE_OPENAI_EMBEDDING_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
+        value: text-embedding-3-small
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        value: eastasia
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_USAGE_LIMITS_ENABLED
+        value: "true"
+      - key: AI_5HOUR_UNIT_LIMIT
+        value: "0"
+      - key: AI_DAILY_UNIT_LIMIT
+        value: "240"
+      - key: AI_WEEKLY_UNIT_LIMIT
+        value: "1200"
+      - key: AI_MONTHLY_UNIT_LIMIT
+        value: "4800"
+      - key: AI_GLOBAL_5HOUR_UNIT_LIMIT
+        value: "2500"
+      - key: AI_GLOBAL_WEEKLY_UNIT_LIMIT
+        value: "6000"
+      - key: AI_GLOBAL_MONTHLY_UNIT_LIMIT
+        value: "22000"
+      - key: AI_SPEECH_USER_5HOUR_SECONDS_LIMIT
+        value: "0"
+      - key: AI_SPEECH_USER_DAILY_SECONDS_LIMIT
+        value: "900"
+      - key: AI_SPEECH_USER_WEEKLY_SECONDS_LIMIT
+        value: "1800"
+      - key: AI_SPEECH_USER_MONTHLY_SECONDS_LIMIT
+        value: "7200"
+      - key: AI_SPEECH_GLOBAL_5HOUR_SECONDS_LIMIT
+        value: "14400"
+      - key: AI_SPEECH_GLOBAL_WEEKLY_SECONDS_LIMIT
+        value: "54000"
+      - key: AI_SPEECH_GLOBAL_MONTHLY_SECONDS_LIMIT
+        value: "180000"
+      - key: AI_OPENAI_AUDIO_ENDPOINTS_ENABLED
+        value: "false"
+      - key: AUTH_REGISTER_IP_LIMIT
+        value: "5"
+      - key: AUTH_REGISTER_EMAIL_LIMIT
+        value: "3"
+      - key: AUTH_REGISTER_WINDOW_SECONDS
+        value: "3600"
+      - key: AUTH_LOGIN_FAILURE_IP_LIMIT
+        value: "12"
+      - key: AUTH_LOGIN_FAILURE_EMAIL_LIMIT
+        value: "5"
+      - key: AUTH_LOGIN_FAILURE_WINDOW_SECONDS
+        value: "900"
+      - key: ACCOUNT_DELETE_FAILURE_IP_LIMIT
+        value: "5"
+      - key: ACCOUNT_DELETE_FAILURE_EMAIL_LIMIT
+        value: "3"
+      - key: ACCOUNT_DELETE_FAILURE_WINDOW_SECONDS
+        value: "3600"
+      - key: APP_PUBLIC_NAME
+        value: BizEng Chatbot
+      - key: SUPPORT_EMAIL
+        value: sanjarqodirjanov@gmail.com
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: WEB_CORS_ORIGINS
+        sync: false
